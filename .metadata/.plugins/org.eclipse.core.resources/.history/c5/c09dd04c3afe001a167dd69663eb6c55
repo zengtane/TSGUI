@@ -1,0 +1,343 @@
+--[[    COPYRIGHT 2018 HONEYWELL INTERNATIONAL   
+        Author : Eliran Noach E599130          ]]
+        
+        
+-- this module contains a varity of usefull functions         
+
+local module = {}
+
+function module.getTextHeight(str, font, font_size, max_width)
+   --gre.get_string_size(font,font_size,string,length,width)
+   local strsize = gre.get_string_size(font, font_size, str,max_width)
+   return strsize
+end  
+
+--
+--
+
+function module.splitFun(str, pat)
+  local t = {}
+  local fpat = "(.-)" .. pat
+  local last_end = 1
+  local s, e, cap = str:find(fpat, 1)
+  while (s) do
+    if (s ~= 1 or cap ~= "") then
+      table.insert(t,cap)
+    end
+    last_end = e+1
+    s, e, cap = str:find(fpat, last_end)
+  end
+  if (last_end <= #str) then
+    cap = str:sub(last_end)
+    table.insert(t, cap)
+  end
+  return t
+end
+
+--
+--
+function module.getLinesHeight(str, fontName, fontSize, ctlWidth)
+  local k, line, ret
+  local maxLineH
+  local lineCount
+
+  ret = gre.get_string_size(fontName, fontSize, "X", 1, ctlWidth)
+  maxLineH = ret.line_height
+
+  lineCount = 0
+
+  local lines = module.splitFun(str, "\n")
+  for k,line in ipairs(lines) do
+    local substring = line
+    local substring_length = #substring
+
+    -- Determine if there is content on the line, if so then split it
+    -- Otherwise if it is just an empty line (\n) then just increment the count
+    if(substring_length > 0) then
+      while(substring_length > 0) do
+        --Determine the size of the string, clipped to the rect
+
+        ret = gre.get_string_size(fontName, fontSize, substring, 0, ctlWidth)
+        if(ret.nchars == nil) then
+          ret.nchars = ret.num_bytes
+        end
+        if(str and ret.nchars < substring_length) then
+          --Back up and find the last space if we can and measure to that, else clip string
+          local clip_string = string.sub(substring, 1, ret.nchars)
+          local ms,me = string.find(clip_string, ".*%s")
+          local clipped_nchars = me or ret.nchars
+          ret = gre.get_string_size(fontName, fontSize, substring, clipped_nchars, ctlWidth)
+          if(ret.nchars == nil) then
+            ret.nchars = ret.num_bytes
+          end
+        end
+
+        if(ret.line_height > maxLineH) then
+          maxLineH = ret.line_height
+        end
+
+        lineCount = lineCount + 1
+
+        --If there is any kind of encoding glitch, then nchars will be 0 so bail
+        if(ret.nchars == nil or ret.nchars == 0) then
+          substring = ""
+          substring_length = 0
+        else
+          substring = string.sub(substring, ret.nchars+1)
+          substring_length = #substring
+        end
+
+      end
+    else
+      lineCount = lineCount + 1
+    end
+  end
+
+  --Adjust the maxLineH to encompass all of the text, maxLineH is either line_height or max character height
+  maxLineH = lineCount * maxLineH
+  return maxLineH
+end
+
+
+function module.makeObjectFromTopic(topic,message)
+  local object = {}
+  local topicLevel = module.stringSplit(topic,"/")
+  local curObject = object
+  local curLevel = topicLevel[1]
+  for i = 2, #topicLevel do
+    local numCheck = tonumber(topicLevel[i])
+    if(numCheck) then
+      curLevel = numCheck
+    else
+      curLevel = topicLevel[i]
+    end
+    curObject[curLevel] = {}
+    if(i == #topicLevel)then
+      if(message ~= nil)then
+        local msgObj = json.decode(message)
+        if(msgObj == nil)then
+          curObject[curLevel] = message
+        else
+          curObject[curLevel] = msgObj
+        end
+      end
+    else
+      curObject = curObject[curLevel]
+    end
+  end
+  return object
+end
+
+function module.isArray(obj)
+  if(type(obj) ~= 'table')then
+    return false
+  end
+  local i = 1
+  for key,val in pairs(obj)do
+    if(i ~= key)then
+      return false
+    end
+    i = i + 1
+  end
+  return true
+end
+
+function module.areSame(t1,t2,ignore_mt)
+  local ty1 = type(t1)
+  local ty2 = type(t2)
+  if ty1 ~= ty2 then 
+    return false 
+  end
+  -- non-table types can be directly compared
+  if ty1 ~= 'table' and ty2 ~= 'table' then 
+    return t1 == t2 
+  end
+  -- as well as tables which have the metamethod __eq
+  local mt = getmetatable(t1)
+  if not ignore_mt and mt and mt.__eq then 
+    return t1 == t2 
+  end
+  for k1,v1 in pairs(t1) do
+  local v2 = t2[k1]
+  if v2 == nil or not module.areSame(v1,v2) then return false end
+  end
+  for k2,v2 in pairs(t2) do
+  local v1 = t1[k2]
+  if v1 == nil or not module.areSame(v1,v2) then return false end
+  end
+  return true
+end
+
+function module.round(x)
+  return math.floor(0.5 + x)
+end
+function module.mod(x,div)
+  return math.floor(math.fmod(x,div))
+end
+
+
+function module.containsString(str, match)
+  if str == nil or match == nil then
+    return false
+  end 
+  local val = string.match(str, match)
+  return val ~= nil
+end
+
+function module.generateRandomSessionToken()
+  local ans = ""
+  for i = 1, 16 do
+    ans = ans .. string.char(math.random(48,122))
+  end
+  return ans
+end
+function module.type(obj)
+  local t = type(obj)
+  if(t == "table")then
+    local jType = getmetatable(obj).__jsontype
+    if(jType ~= nil)then
+      if(jType == "null")then
+        jType = "nil"
+        
+      end
+      return jType
+    end
+  end
+  return t
+end
+function module.listToString(list)
+  local str = ""
+  if (list~=nil) then 
+    local data = {}
+    for index=1,#list-1 do
+      str = str .. tostring(list[index]) .. ","
+    end
+    str = str .. tostring(list[#list])
+  end
+  return str  
+end
+function module.lastIndexOf(str, char)
+  return str:match('^.*()' .. char)
+end
+function module.stringSplit(inputstr, sep)
+  if inputstr == nil then
+    return nil
+  end
+        if sep == nil then
+                sep = "%s"
+        end
+        local t={} ; i=1
+        for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+                t[i] = str
+                i = i + 1
+        end
+        return t
+end
+function module.deepcopy(orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            copy[module.deepcopy(orig_key)] = module.deepcopy(orig_value)
+        end
+        setmetatable(copy, module.deepcopy(getmetatable(orig)))
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
+end
+
+function module.changeBrightness(hexColor, percentage)
+  local oR = math.floor( hexColor / 0x010000)
+  local oG = math.fmod(math.floor(hexColor / 0x000100),0x000100) 
+  local oB = math.fmod(hexColor,0x000100)
+  local r = math.min(255, math.floor(oR *percentage))
+  local g = math.min(255,math.floor(oG *percentage))
+  local b = math.min(255,math.floor(oB *percentage))
+  return (r * 0x010000) + (g * 0x000100) + b
+end
+
+function module.readJSON(filePath, absolutePath)
+
+  local path = gre.APP_ROOT .. filePath
+  if(absolutePath ~= nil and absolutePath == true)then
+    path = filePath
+  end
+
+  print(path)
+  local file = io.open(path, "rb") -- r read mode and b binary mode
+    if not file then 
+      if gre.env("target_cpu") == "x86" then
+        error(path .. " doesn't exist")
+      end
+      return nil 
+    end
+  local content = file:read "*a" -- *a or *all reads the whole file
+    file:close()
+
+  local obj = json.decode(content)
+  return obj
+end
+
+function module.getDictionarySize(mapInstance)
+  local count = 0
+  for key, val in pairs(mapInstance) do
+    count = count + 1
+  end
+  return count
+end
+function module.isArray(obj)
+  if(type(obj) ~= 'table')then
+    return false
+  end
+  local i = 1
+  for key,val in pairs(obj)do
+    if(i ~= key)then
+      return false
+    end
+    i = i + 1
+  end
+  return true
+end
+
+function module.isTableEmpty(t)
+ if t == nil then return true end
+ if next(t) == nil then
+  return true
+ end
+ return false
+end
+
+function module.findInArray(Obj, key)
+ if t == nil then return -1 end
+ if isArray(Obj) ~= true then return -1 end
+ 
+ size = #Obj
+ for i = 1, size do
+  if Obj[i] == key then return i end
+ end
+ return -1
+end
+
+--- convert int or boolean to boolean
+--@param val:int or bolean
+--@return boolean
+function module.ToBoolean(val)
+  if val == nil then return nil end
+  
+  if type(val) == "boolean" then
+    return val
+  end
+
+  local boleanVal = false
+  if val ~= 0 then
+    boleanVal = true
+  end
+  
+  return boleanVal
+end
+
+
+
+return module

@@ -1,0 +1,16 @@
+
+gre.animate.complete.hide_mon_to_fri##hide_mon_to_fri animation complete #The animation named hide_mon_to_fri has completed
+
+TOGGLE_ON##TOGGLE_ON
+
+TOGGLE_OFF##TOGGLE_OFF
+
+gre.animate.complete.info##info animation complete #The animation named info has completed
+
+gre.animate.complete.info_reversed##info_reversed animation complete #The animation named info_reversed has completed
+
+gre.animate.complete.show_5day##show_5day animation complete #The animation named show_5day has completed
+
+run_show_5day
+
+run_hide_mon_to_fri

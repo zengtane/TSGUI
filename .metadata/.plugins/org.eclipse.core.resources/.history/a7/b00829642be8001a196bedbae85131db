@@ -1,0 +1,108 @@
+local screenManager = require "ScreenManager"
+local dropdown = require "DropdownList"
+local zwaveCommands = require("ZwaveCommands")
+local touchManager = require("TouchManager")
+local private = {}
+private.zwaveDevice = nil;
+private.partitionNames = {}
+  
+function initDeviceSettings(mapargs)
+  private.partitionNames = {
+    [0] = sid["SID_UNASSIGNED"],
+    [1]= sid["SID_HOME_PARTITION"].. " 1",
+    [2]= sid["SID_HOME_PARTITION"].. " 2",
+    [3]= sid["SID_HOME_PARTITION"].. " 3",
+    [4]= sid["SID_HOME_PARTITION"].. " 4"}
+  local obj = screenManager.data["device"]
+  if(obj ~= nil)then
+    private.zwaveDevice = obj
+    onPopulateDeviceSettingsContent(obj)
+  end
+  gre.set_layer_attrs(screenManager.getCurrentScreen() .. ".DropdownList", {hidden = true})
+end
+--
+--
+--
+function onPopulateDeviceSettingsContent(obj)
+  local d = {}
+  if(obj.Favorite == nil)then
+    obj.Favorite = false
+  end
+  local seclev
+  local SecurLevelMap = {
+    {['bits'] = 4,   ['seclev']  = "S2_L3"},
+    {['bits'] = 2,   ['seclev']  = "S2_L2"},
+    {['bits'] = 1,   ['seclev']  = "S2_L1"}
+  }
+  if obj._SecurityLevel==0 or obj._SecurityLevel== 128 then
+    local secLevelMap = {
+      [0] = sid["SID_None_Secured"],
+      [128] = "S0"
+    }
+    seclev = secLevelMap[obj._SecurityLevel]
+  else
+    for _, v in pairs(SecurLevelMap) do
+      if bit32.band(obj._SecurityLevel,v.bits)== v.bits then
+        seclev = "S2_L3"
+        break
+      end
+    end
+   end
+  d["DeviceSettingTitle.Title.text"] = sid["SID_DEVICE_SETTINGS"]
+  d["DeviceSettingContent.Row1.title"] = sid["SID_NAME"]
+  d["DeviceSettingContent.Row1.textValue"] = obj:getName()
+  d["DeviceSettingContent.Row2.Text.title"] = sid["SID_ASSOCIATED_PARTITION"]
+  d["DeviceSettingContent.Row2.Text.textValue"] = private.partitionNames[obj.Partition]
+  d["DeviceSettingContent.Row3.Text.title"] = sid["SID_FAVORITE_DESCRIPTION"]
+  d["DeviceSettingContent.Row3.Text.textValue"] = sid["SID_FAVORITE"]
+  d["DeviceSettingContent.Row3.star.image"] = obj.Favorite == true and res["RES_DEVICE_IS_FAVORITE_ICON"] or  res["RES_DEVICE_IS_NOT_FAVORITE_ICON"]
+  d["DeviceSettingContent.Row4.text"] = sid["SID_SECURITY_LEVEL"]  .. seclev
+  d["DeviceSettingContent.Row5.text"] = sid["SID_VENDOR_NAME"]  .. obj:getVendorName()
+  d["DeviceSettingContent.Row6.text"] = sid["SID_PRODUCT_ID"] .. obj:getProductID()
+  d["DeviceSettingContent.Row7.text"] = sid["SID_PRODUCT_TYPE"] .. obj:getProductType()
+  d["DeviceSettingContent.Row8.text"] =  sid["SID_NODE_ID"]  .. obj:getNodeID()
+  gre.set_data(d)
+end
+--
+--
+--
+function onReleaseDeviceSettingsDropdownArrow(args)
+  dropdown.show(540,100,250,330, private.partitionNames , 1 , private.onDropdownSelected)
+end
+--
+--
+--
+function private.onDropdownSelected(i)
+ local d = {}
+ d["DeviceSettingContent.Row2.Text.textValue"] = private.partitionNames[i]
+ gre.set_data(d)
+end
+--
+--
+--
+function onReleaseDeviceSettingStarIcon(mapargs) 
+  local d = {}
+  if(private.zwaveDevice.Favorite == nil)then
+    private.zwaveDevice.Favorite = false
+  end
+  if(private.zwaveDevice.Favorite) then
+    d["DeviceSettingContent.Row3.star.image"] = res["RES_DEVICE_IS_NOT_FAVORITE_ICON"]
+    private.zwaveDevice.Favorite = false
+  else
+    d["DeviceSettingContent.Row3.star.image"] = res["RES_DEVICE_IS_FAVORITE_ICON"]
+    private.zwaveDevice.Favorite = true
+  end
+  gre.set_data(d)
+end
+function OnZwaveDeviceSettingsNamePress(args)
+  local data = {}
+  data.releaseFunc = function(...)
+    args.field = args.context_control .. ".textValue"
+    args.isConfidential = false
+    args.callback = function(text)
+      zwaveCommands.setName(private.zwaveDevice,text)
+    end
+    initKeyboard(args)
+  end
+  touchManager.setUpTouchEvent(data)
+end

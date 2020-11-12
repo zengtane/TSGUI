@@ -1,0 +1,551 @@
+local screenManager = require("ScreenManager")
+local touchManager = require("TouchManager")
+local zwaveCommands = require("ZwaveCommands")
+local screenManager = require("ScreenManager")
+local inactivityTimerManager = require("InactivityTimerManager")
+local animationManager = require("AnimationManager")
+local zwaveListScreen  =require("ZwaveListScreen")
+local zwaveEvents = require("ZWaveEvents")
+local zwaveDeviceManager = require("ZWaveDeviceManager")
+local zwaveList = require("ZWaveDeviceList")
+local private = {}
+private.showAnim = nil
+private.hideAnim = nil
+private.spinnerAnim = nil
+
+function onInitZwaveManagementScreen(mapargs) 
+  inactivityTimerManager.suspendInactivityTimer()
+  local d = {}
+  local table1 = {}
+  local table2 = {}
+  local table3 = {}
+  print(zwaveEvents.ZwaveRole)
+  
+  if(__viewModelProgramming == true) then    
+    gre.set_layer_attrs("ZwaveManagementScreen.PanicButton",{hidden=1})
+    gre.set_layer_attrs("ZwaveManagementScreen.BottomBar",{hidden=1})
+    gre.set_layer_attrs("ZwaveManagementScreen.ZwaveManagementContent",{height=500})
+  else
+    gre.set_layer_attrs("ZwaveManagementScreen.PanicButton",{hidden=0})
+    gre.set_layer_attrs("ZwaveManagementScreen.BottomBar",{hidden=0})
+    gre.set_layer_attrs("ZwaveManagementScreen.ZwaveManagementContent",{height=400})
+  end
+  
+  if((zwaveEvents.ZwaveRole == "SIS" and zwaveList.getDevicesCount() == 0) or (zwaveEvents.ZwaveRole == "Inclusion")) then
+    table1 = {sid["SID_ZWAVE_ENROLLED_DEVICE"], sid["SID_ZWAVE_INCLUSION_MODE"], sid["SID_ZWAVE_EXCLUSION_MODE"]} --, sid["SID_ZWAVE_DOOR_LOCKING_OPTIONS"], sid["SID_ZWAVE_TEST_DEVICE"], sid["SID_ZWAVE_NETWORK_INCLUSION_MODE"]
+    table2 = {sid["SID_ZWAVE_ENROLLED_CONTROLLER"], sid["SID_ZWAVE_LEARN_CONTROLLER"], sid["SID_ZWAVE_UPDATE_NETWORK"]} --, sid["SID_ZWAVE_SHIFT_CONTROLLER"]
+    table3 = {sid["SID_ZWAVE_DELETE_ALL_DEVICE"], sid["SID_ZWAVE_RESET_CONTROLLER"] }
+  elseif(zwaveEvents.ZwaveRole == "SIS" and zwaveList.getDevicesCount() > 0) then
+    table1 = {sid["SID_ZWAVE_ENROLLED_DEVICE"], sid["SID_ZWAVE_INCLUSION_MODE"], sid["SID_ZWAVE_EXCLUSION_MODE"]} --, sid["SID_ZWAVE_DOOR_LOCKING_OPTIONS"], sid["SID_ZWAVE_TEST_DEVICE"], , sid["SID_ZWAVE_NETWORK_INCLUSION_MODE"]
+    table2 = {sid["SID_ZWAVE_ENROLLED_CONTROLLER"] ,sid["SID_ZWAVE_UPDATE_NETWORK"]} --, sid["SID_ZWAVE_SHIFT_CONTROLLER"]
+    table3 = {sid["SID_ZWAVE_DELETE_ALL_DEVICE"], sid["SID_ZWAVE_RESET_CONTROLLER"] }
+  elseif(zwaveEvents.ZwaveRole == "Primary") then
+    --Do nothing
+  elseif(zwaveEvents.ZwaveRole == "Secondary")then
+    table1 = {sid["SID_ZWAVE_ENROLLED_DEVICE"]}
+    table2 = {sid["SID_ZWAVE_ENROLLED_CONTROLLER"], sid["SID_ZWAVE_LEARN_CONTROLLER"],sid["SID_ZWAVE_UPDATE_NETWORK"]}
+    table3 = {sid["SID_ZWAVE_RESET_CONTROLLER"] }
+  end
+--  table1 = {sid["SID_ZWAVE_ENROLLED_DEVICE"], sid["SID_ZWAVE_INCLUSION_MODE"], sid["SID_ZWAVE_EXCLUSION_MODE"], sid["SID_ZWAVE_NETWORK_INCLUSION_MODE"], sid["SID_ZWAVE_DOOR_LOCKING_OPTIONS"], sid["SID_ZWAVE_TEST_DEVICE"]}
+--  table2 = {sid["SID_ZWAVE_ENROLLED_CONTROLLER"], sid["SID_ZWAVE_LEARN_CONTROLLER"], sid["SID_ZWAVE_SHIFT_CONTROLLER"],sid["SID_ZWAVE_UPDATE_NETWORK"]}
+--  table3 = {sid["SID_ZWAVE_DELETE_ALL_DEVICE"], sid["SID_ZWAVE_RESET_CONTROLLER"] }
+  gre.set_control_attrs("ZWaveManagementModal.JoinButton",{ hidden = true})
+  gre.set_control_attrs("ZWaveManagementModal.LeftButton",{ hidden = true})
+  gre.set_control_attrs("ZWaveManagementModal.RightButton",{ hidden = true})
+  d["TitleBar.Title.text"]= sid["SID_ZWAVE_MANAGEMENT"]
+  d[screenManager.getCurrentScreen() .. ".ZwaveAddDelModal.grd_y"] = -600
+  d[screenManager.getCurrentScreen() .. ".Mask.grd_hidden"] = 1
+  
+  --
+  -- ken chan added, using variables to the heights
+  -- the original height was 110, been updated to 86
+  local _rowHeight = 86
+  local _gapHeight = 37
+   gre.set_table_attrs("ZwaveManagementContent.Table1",{ rows = #table1})
+--   gre.set_table_attrs("ZwaveManagementContent.Table1",{height = _rowHeight * #table1})
+   
+   gre.set_table_attrs("ZwaveManagementContent.Table2",{ rows = #table2})
+--   gre.set_table_attrs("ZwaveManagementContent.Table2",{height = _rowHeight * #table1+})
+   
+   gre.set_table_attrs("ZwaveManagementContent.Table3",{ rows = #table3})
+   
+    gre.set_control_attrs("ZwaveManagementContent.BgFill1",{y = _rowHeight*(#table1)}) -- originally 110
+    gre.set_control_attrs("ZwaveManagementContent.BgFill2",{y = (_rowHeight*(#table1 + #table2)) + _gapHeight}) -- originally 477
+
+  
+  
+  for i, v in pairs(table1) do
+    d["ZwaveManagementContent.Table1.text."..i..".1"] = v
+    d["ZwaveManagementContent.Table1.color."..i..".1"] = 0xFFFFFF
+  end
+  --
+  for i, v in pairs(table2) do
+    d["ZwaveManagementContent.Table2.text."..i..".1"] = v
+    d["ZwaveManagementContent.Table2.color."..i..".1"] = 0xFFFFFF
+  end
+  --
+  for i, v in pairs(table3) do
+    d["ZwaveManagementContent.Table3.text."..i..".1"] = v
+    d["ZwaveManagementContent.Table3.color."..i..".1"] = 0xFFFFFF
+  end
+  --
+  d["ZwaveManagementContent.BusyInfo2.grd_hidden"]=1
+  d["ZwaveManagementContent.BusyInfo3.grd_hidden"]=1
+  private.table1 = {}
+  private.tabel2 = {}
+  private.tabel3 = {}
+  private.table1 = table1
+  private.tabel2 = table2
+  private.tabel3 = table3
+  gre.set_data(d)
+  
+   private.modalAttrs = {
+        warning = {text = "", grd_hidden = 1},
+        deviceinfo = {text = "", grd_hidden = 1},
+        rightButton = {text = sid["SID_EXCLUDE_ANOTHER"], grd_hidden = 1},
+        leftButton = {text = sid["SID_DONE"], grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = "" , grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_INCLUSION_START_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text = sid["SID_DONE"], grd_hidden = 0},
+      }
+end
+
+function OnScreenHidePre_ZwaveManagementScreen(args)
+  animationManager.stopAll()
+  private.spinnerAnim = nil
+  private.showAnim = nil
+  private.hideAnim = nil
+end
+
+
+function onClickZwaveManagementTable1(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.downColor = 0xF7F7F7
+  d.releaseFunc = function()
+    local row = mapargs.context_row
+    if row == 1 then
+      screenManager.switchToNextScreen("ZwaveListScreen")
+    elseif row == 2 then
+      print("onClickZwaveManagementTable1 add")
+      private.modalAttrs.devices["text"] = "0" .. " " .. sid["SID_DEVICE"] .. " " .. sid["SID_INCLUDED"]
+      zwaveListScreen.showModal(private.modalAttrs)
+      gre.send_event("LocalZwaveEnrollmentRequest")
+      zwaveCommands.enterInclusionMode()
+    elseif row == 3 then
+      print("onClickZwaveManagementTable1 remove")
+      private.modalAttrs.text= {text = sid["SID_ZWAVE_EXCLUSION_START_MESSAGE"]}
+      private.modalAttrs.title = {text = sid["SID_ZWAVE_EXCLUSION"]}
+      private.modalAttrs.devices["text"] = "0" .. " " .. sid["SID_DEVICE"] .. " " .. sid["SID_EXCLUDED"]
+      zwaveListScreen.showModal(private.modalAttrs)
+      zwaveCommands.enterExclusionMode()
+    elseif row == 4 then
+    
+    elseif row == 5 then
+    
+    elseif row == 6 then
+    end
+  end  
+  touchManager.setUpTouchEvent(d)
+end
+
+
+
+function onClickZwaveManagementTable2(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.downColor = 0xF7F7F7
+  d.releaseFunc = function()
+    local row = mapargs.context_row
+    if (private.tabel2[row] == sid["SID_ZWAVE_ENROLLED_CONTROLLER"]) then
+      private.onClickEnrolledController()
+    elseif (private.tabel2[row] == sid["SID_ZWAVE_LEARN_CONTROLLER"]) then
+      private.onClickLearnController()
+    elseif (private.tabel2[row] == sid["SID_ZWAVE_SHIFT_CONTROLLER"]) then
+      private.onClickShiftController()
+    elseif (private.tabel2[row] == sid["SID_ZWAVE_UPDATE_NETWORK"]) then
+      private.onClickUpdateNetwork()
+    end
+  end  
+  touchManager.setUpTouchEvent(d)
+end
+
+
+function onClickZwaveManagementTable3(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.downColor = 0xF7F7F7
+  if(private.tabel3[mapargs.context_row] == sid["SID_ZWAVE_RESET_CONTROLLER"]) then
+    d.releaseFunc = function()private.onClickedResetController() end 
+  elseif(private.tabel3[mapargs.context_row] == sid["SID_ZWAVE_DELETE_ALL_DEVICE"]) then
+    d.releaseFunc = function()
+      zwaveDeviceManager.removeAllFailedDevices();
+    end
+  end
+--  d.releaseFunc = function()
+--  local row = mapargs.context_row
+--    if row == 1 then
+--      zwaveDeviceManager.removeAllFailedDevices();
+--    elseif row == 2 then
+--      private.onClickedResetController()
+--    end
+--  end  
+  touchManager.setUpTouchEvent(d)
+end
+
+function onHideZwaveManagementScreen()
+  inactivityTimerManager.restartInactivityTimer()
+end
+
+
+function private.onClickedResetController()
+  local leftButton = {}
+  local rightButton = {}
+  local middleButton = nil
+  leftButton["text"] = sid["SID_CANCEL"]
+  rightButton["text"] = sid["SID_RESET"]
+  leftButton["callback"] = function()
+    private.hideModal()
+  end
+  rightButton["callback"] = function()
+    private.setupInProgerssAnimation(sid["SID_ZWAVE_RESET_CONTROLLER"],sid["SID_PLEASE_WAIT"])
+    zwaveCommands.resetController()
+  end
+  
+  private.showModal(sid["SID_ZWAVE_RESET_CONTROLLER"], sid["SID_RESET_CONTROLLER_TEXT"], leftButton,
+   rightButton,middleButton)
+end
+
+function private.onClickDeleteAllDevices()
+  
+end
+
+function private.onClickEnrolledDevices()
+
+end
+
+function private.onClickInclusionMode()
+
+end
+
+function private.onClickExclusionMode()
+
+end
+
+function OnReceiveController_ZwaveManagementScreen(args)
+  local str = args.context_event_data.device
+  local obj = json.decode(str)
+ if(tonumber(obj.id) == tonumber(zwaveEvents.ControllerID)) then -- no need to display controller on ZwaveListScreen
+    private.controllerDevice = obj
+  end
+end
+
+function private.onClickEnrolledController()
+  private.showModal(sid["SID_ZWAVE_ENROLLED_CONTROLLER"], nil, nil,nil,nil)
+  local table = {}
+  if(private.controllerDevice ==nil or private.controllerDevice._SecurityLevel == nil)then
+    zwaveCommands.updateLocalController()
+    local body = sid["SID_GO_AND_CHECK_AGAIN"]
+    table["ZWaveManagementModal.Group.text.text"] = body
+    table["ZWaveManagementModal.Group.title.text"] = sid["SID_ZWAVE_ENROLLED_CONTROLLER"]
+    table["ZWaveManagementModal.Group.dskPinDisplay.text"] = ""
+    table["ZWaveManagementModal.Group.leftButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.rightButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.middleButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.spinner.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.dskPinDisplay.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.underline.grd_hidden"] = 1
+    gre.set_data(table)
+  else
+    local body =  "ZWave"..sid["SID_VERSION"]..": " .. zwaveEvents.ZWareVer
+                .."\n"..sid["SID_HOME_ID"] .. zwaveEvents.HomeID 
+                .."\n "..sid["SID_PRODUCT_TYPE"] .. private.controllerDevice._ProductType 
+                .."   "..sid["SID_PRODUCT_ID"]..private.controllerDevice._ProductID
+                  .."\n".. sid["SID_ZWAVE_ROLE"] .. zwaveEvents.ZwaveRole
+                  .."   "..sid["SID_NODE_ID"]..private.controllerDevice._NodeID 
+                  .."\n ".. sid["SID_VENDOR_NAME"]..private.controllerDevice._VendorName
+    
+    table["ZWaveManagementModal.Group.text.text"] = body
+    table["ZWaveManagementModal.Group.title.text"] = sid["SID_ZWAVE_ENROLLED_CONTROLLER"]
+    table["ZWaveManagementModal.Group.dskPinDisplay.text"] = ""
+    table["ZWaveManagementModal.Group.leftButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.rightButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.middleButton.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.spinner.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.dskPinDisplay.grd_hidden"] = 1
+    table["ZWaveManagementModal.Group.underline.grd_hidden"] = 1
+    gre.set_data(table)
+  end
+    -- zwaveCommands.enterLearnMode()
+end
+
+
+function private.onClickLearnController()
+  private.showModal(sid["SID_ZWAVE_LEARN_CONTROLLER"], nil, nil,nil,nil)
+  private.setupInProgerssAnimation(sid["SID_ZWAVE_LEARN_CONTROLLER"],sid["SID_PLEASE_WAIT"])
+  zwaveCommands.enterLearnMode()
+end
+
+function private.onClickShiftController()
+  private.showModal(sid["SID_ZWAVE_SHIFT_CONTROLLER"], nil, nil,nil,nil)
+  private.setupInProgerssAnimation(sid["SID_ZWAVE_SHIFT_CONTROLLER"],sid["SID_PLEASE_WAIT"])
+  zwaveCommands.shiftToSecondaryController()
+end
+
+function private.onClickUpdateNetwork()
+  private.showModal(sid["SID_ZWAVE_UPDATE_NETWORK"], nil, nil,nil,nil)
+  private.setupInProgerssAnimation(sid["SID_ZWAVE_UPDATE_NETWORK"],sid["SID_PLEASE_WAIT"])
+  zwaveCommands.updateNetwork()
+end
+
+function private.showModalAnimi()
+  if private.showAnim == nil then
+    local steps = 
+      {
+        {
+          rate = "easeout",
+          to = 70,
+          duration = 1000,
+          key = "Mask.Mask.alpha"
+        },
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1,
+          key = "ZwaveManagementScreen.ZWaveManagementModal.grd_hidden"
+        },
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1000,
+          key = "ZwaveManagementScreen.ZWaveManagementModal.grd_y"
+        },
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 0,
+          key = "ZwaveManagementScreen.Mask.grd_hidden"
+        },
+      }
+     private.showAnim = animationManager.create(steps)
+  end
+  animationManager.stop(private.spinnerAnim)
+  animationManager.stop(private.hideAnim)
+  animationManager.play(private.showAnim)
+end
+
+function private.showModal(title, body, leftbutton,rightButton,middleButton)
+ 
+  local table = {}
+  table["ZWaveManagementModal.Group.text.text"] = body
+  table["ZWaveManagementModal.Group.title.text"] = title
+  table["ZWaveManagementModal.Group.spinner.grd_hidden"] = 1
+  table["ZWaveManagementModal.Group.closeButton.grd_hidden"] = 0
+  table["ZWaveManagementModal.Group.dskPinDisplay.grd_hidden"] = 1
+  
+  if leftbutton ==nil then
+    private.leftButtonCallback = nil
+    table["ZWaveManagementModal.Group.leftButton.grd_hidden"] = 1
+  else
+    table["ZWaveManagementModal.Group.leftButton.grd_hidden"] = 0
+    table["ZWaveManagementModal.Group.leftButton.text"] = leftbutton.text
+    private.leftButtonCallback = leftbutton["callback"]
+    
+  end
+  if rightButton == nil then
+    private.rightButtonCallback = nil
+    table["ZWaveManagementModal.Group.rightButton.grd_hidden"] = 1
+  else
+    table["ZWaveManagementModal.Group.rightButton.grd_hidden"] = 0
+    table["ZWaveManagementModal.Group.rightButton.text"] = rightButton.text
+    private.rightButtonCallback = rightButton["callback"]
+    
+  end
+  if middleButton == nil then
+    private.middleButtonCallback = nil
+    table["ZWaveManagementModal.Group.middleButton.grd_hidden"] = 1
+  else
+    table["ZWaveManagementModal.Group.middleButton.grd_hidden"] = 0
+    table["ZWaveManagementModal.Group.middleButton.text"] = middleButton.text
+    private.middleButtonCallback = middleButton["callback"]
+    
+  end
+             
+  gre.set_data(table)
+  private.showModalAnimi()
+end
+
+
+function private.hideModal()
+ if private.hideAnim == nil then
+    local steps = 
+      {
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1000,
+          key = "Mask.Mask.alpha"
+        },
+        {
+          rate = "easeout",
+          to = 1,
+          duration = 0,
+          offset = 1000,
+          key = "ZwaveManagementScreen.ZWaveManagementModal.grd_hidden"
+        },
+        {
+          rate = "easeout",
+          to = -600,
+          duration = 1000,
+          key = "ZwaveManagementScreen.ZWaveManagementModal.grd_y"
+        },
+        {
+          rate = "easeout",
+          to = 1,
+          offset = 1000,
+--           duration = 0,
+          key = "ZwaveManagementScreen.Mask.grd_hidden"
+        },
+      }
+     private.hideAnim = animationManager.create(steps)
+  end
+  animationManager.stop(private.spinnerAnim)
+  animationManager.stop(private.showAnim)
+  animationManager.play(private.hideAnim)
+ 
+  
+end
+
+
+function ZWaveManagementModalOnLeftButtonClicked()
+  if private.leftButtonCallback ~=nil then 
+    private.leftButtonCallback()
+  end  
+end
+
+function ZWaveManagementModalOnRightButtonClicked()
+  if private.rightButtonCallback~=nil then 
+    private.rightButtonCallback()
+  end
+end
+
+function ZWaveManagementModalOnMiddleButtonClicked()
+  if private.middleButtonCallback~=nil then 
+    private.middleButtonCallback()
+  end  
+end
+
+
+
+
+function ZWaveManagementOnReceiveZWaveNetworkModeChange(mapargs)
+  local operation = mapargs.context_event_data.operation
+  local status = mapargs.context_event_data.status
+  
+  if operation == "Reset" and status == "OpDone" then
+    zwaveDeviceManager.removeAllFavoriteDevices()
+    animationManager.stop(private.spinnerAnim)
+    private.hideModal()
+    zwaveCommands.updateLocalController()
+    onInitZwaveManagementScreen()
+  end
+  if operation == "Reset" and status == "OpFailed" then
+    local table = {}
+    animationManager.stop(private.spinnerAnim)
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_RESET_FAILED"]
+    gre.set_data(table)
+  end
+  if operation == "EnterLearnMode" and status == "OpStart" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_FOUND_CONTROLLER"]
+    gre.set_data(table)
+  end
+  if operation == "EnterLearnMode" and status == "ProtocolDone" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = "ProtocolDone"
+    gre.set_data(table)
+  end
+  if operation == "EnterLearnMode" and status == "EchoDSKPin" then
+    local dskPin = mapargs.context_event_data.DskPin
+    private.updateDskPin(dskPin)
+  end
+  if operation == "EnterLearnMode" and status == "OpDone" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_OPERATION_DONE"]
+    animationManager.stop(private.spinnerAnim)
+    gre.set_data(table)
+    private.hideModal()
+  end
+  if operation == "EnterLearnMode" and status == "OpFailed" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_ZWAVE_LEARN_FAILED"]
+    animationManager.stop(private.spinnerAnim)
+    gre.set_data(table)
+    -- private.hideModal()
+  end
+  if operation == "NetworkUpdate" and status == "OpDone" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_ZWAVE_UPDATE_NETWORK_DONE"]
+    animationManager.stop(private.spinnerAnim)
+    gre.set_data(table)
+    private.hideModal()
+  end
+  if operation == "NetworkUpdate" and status == "OpFailed" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_ZWAVE_UPDATE_NETWORK_Failed"]..","..sid["SID_DEFAULT_OPTIONS_FACTORY_DEFAULT_FAIL_PARA"]
+    animationManager.stop(private.spinnerAnim)
+    gre.set_data(table)
+    private.hideModal()
+  end
+  if operation == "NetworkUpdate" and status == "OpBusy" then
+    local table = {}
+    table["ZWaveManagementModal.Group.text.text"] = sid["SID_ZWAVE_UPDATE_NETWORK_Failed"]..","..sid["SID_DEFAULT_OPTIONS_FACTORY_DEFAULT_FAIL_PARA"]
+    animationManager.stop(private.spinnerAnim)
+    gre.set_data(table)
+    private.hideModal()
+  end
+end
+
+function private.updateDskPin(dskpin)
+  local table = {}
+  table["ZWaveManagementModal.Group.dskPinDisplay.text"] = "DSK PIN:".." "..dskpin
+  table["ZWaveManagementModal.Group.underline.grd_hidden"] = 0
+  gre.set_data(table)
+end
+
+function private.setupInProgerssAnimation(title,body)
+  local table = {}
+  table["ZWaveManagementModal.Group.text.text"] = body
+  table["ZWaveManagementModal.Group.title.text"] = title
+  table["ZWaveManagementModal.Group.dskPinDisplay.text"] = ""
+  table["ZWaveManagementModal.Group.leftButton.grd_hidden"] = 1
+  table["ZWaveManagementModal.Group.rightButton.grd_hidden"] = 1
+  table["ZWaveManagementModal.Group.middleButton.grd_hidden"] = 1
+  table["ZWaveManagementModal.Group.spinner.grd_hidden"] = 0
+  table["ZWaveManagementModal.Group.dskPinDisplay.grd_hidden"] = 0
+  table["ZWaveManagementModal.Group.underline.grd_hidden"] = 1
+  gre.set_data(table)
+  private.inProgressAnimation()
+
+end
+
+function private.inProgressAnimation()
+  if private.spinnerAnim == nil then
+    local step = {}
+    step["duration"] = 2000
+    step["from"] = 0
+    step["to"] = 359
+    step["key"] = "ZWaveManagementModal.Group.spinner.angle"
+    private.spinnerAnim = animationManager.createLoop({step})
+  end
+  animationManager.play(private.spinnerAnim)
+end
+
+function ZWaveManagementOnCloseButtonClicked()
+  zwaveCommands.abortOperation()
+  private.hideModal()
+  onInitZwaveManagementScreen()
+end
+

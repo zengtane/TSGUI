@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename resource &apos;Quicksilver_GUI/Quicksilver_GUI_1024x600 - master.gde&apos; to &apos;Quicksilver_GUI_1024x600.gde&apos;" description="Rename resource &apos;Quicksilver_GUI_1024x600 - master.gde&apos;" flags="7" id="org.eclipse.ltk.core.refactoring.rename.resource" input="Quicksilver_GUI_1024x600 - master.gde" name="Quicksilver_GUI_1024x600.gde" stamp="1597629235450" updateReferences="true"/>
+</session>

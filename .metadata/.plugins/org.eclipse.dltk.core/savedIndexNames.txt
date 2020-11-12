@@ -1,0 +1,9 @@
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\3553701062.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\631699591.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\130392714.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\3438666254.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\2575395457.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\2657513395.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\1990765700.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\1689222283.index
+C:\Users\231585\TSGUIProto\.metadata\.plugins\org.eclipse.dltk.core\2442785703.index

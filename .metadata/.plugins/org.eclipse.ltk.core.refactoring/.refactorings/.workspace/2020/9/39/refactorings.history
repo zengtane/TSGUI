@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Delete resource &apos;Quicksilver_GUI/Quicksilver_GUI_1024x600 (1).gde&apos;" deleteContents="false" description="Delete resource &apos;Quicksilver_GUI/Quicksilver_GUI_1024x600 (1).gde&apos;" element1="/Quicksilver_GUI/Quicksilver_GUI_1024x600 (1).gde" flags="7" id="org.eclipse.ltk.core.refactoring.delete.resources" resources="1" stamp="1601001986429"/>
+</session>

@@ -1,0 +1,1 @@
+jar signed.Warning: No -tsa or -tsacert is provided and this jar is not timestamped. Without a timestamp, users may not be able to validate this jar after the signer certificate's expiration date (2035-09-02) or after any future revocation date.

@@ -1,0 +1,241 @@
+--[[    COPYRIGHT 2018 HONEYWELL INTERNATIONAL   
+        Author : Eliran Noach E599130          ]] 
+        
+local utils = require ("Utils")        
+local private = {}
+local public = {}
+
+private.attributeMap = {
+  ["Switch"] = "@Switch",
+  ["Lock"] = "@Lock",
+  ["Thermostat"] = "@Thermostat",
+  ["Dimmer"] = "@Dimmer",
+  ["Garage"] = "@Garage",
+  ["Controller"] = "@Controller",
+  ["WaterValve"] = "@WaterValve",
+  ["Unknown"] = "@Unknown"
+
+}
+
+
+function public.initZWaveDevice(deviceObj)
+  return setmetatable({
+    
+    id = deviceObj.id~=nil and deviceObj.id or -1 ,
+    Status = deviceObj.Status~=nil and deviceObj.Status or sid["SID_UNKNOWN"] ,
+    _Type = deviceObj._Type~=nil and deviceObj._Type or sid["SID_UNKNOWN"],
+    Partition = deviceObj.Partition~=nil and deviceObj.Partition or 0,
+    _NodeID = deviceObj._NodeID~=nil and deviceObj._NodeID or -1,
+    _ProductID = deviceObj._ProductID~=nil and deviceObj._ProductID or -1,
+    _ProductType = deviceObj._ProductType~=nil and deviceObj._ProductType or -1,
+    _VendorName = deviceObj._VendorName~=nil and deviceObj._VendorName or sid["SID_UNKNOWN"],
+    _Favorite = deviceObj.Favorite or 0,
+    _ProtoVer = deviceObj._ProtoVer~=nil and deviceObj._ProtoVer or sid["SID_UNKNOWN"] ,
+    _SecurityLevel = deviceObj._SecurityLevel~=nil and deviceObj._SecurityLevel or -1 ,
+    _Capabilities = deviceObj._Capabilities~=nil and deviceObj._Capabilities or {},
+    _WakeUpInterval = deviceObj._WakeUpInterval~=nil and deviceObj._WakeUpInterval or -1 ,
+    Name = deviceObj.Name~=nil and deviceObj.Name or "",
+    _Location = deviceObj._Location~=nil and deviceObj._Location or sid["SID_UNKNOWN"] ,
+    Status = deviceObj.Status~=nil and deviceObj.Status or "",
+    Endpoints = deviceObj.Endpoints~=nil and deviceObj.Endpoints or {}, 
+    _stateObj = deviceObj._Type~=nil and deviceObj[private.attributeMap[deviceObj._Type]] or {},
+	_SecurityCap = deviceObj._SecurityCap~=nil and deviceObj._SecurityCap or -1 ,
+    _SecurityWarn = deviceObj._SecurityWarn~=nil and deviceObj._SecurityWarn or -1 ,
+    _SecurityLevel = deviceObj._SecurityLevel~=nil and deviceObj._SecurityLevel or -1 ,
+    _CCSupport = deviceObj._CCSupport or 0,
+
+    
+    getID = function(ref)
+      return ref.id
+    end,
+	
+    getSecLevel = function(ref)
+      return ref._SecurityLevel
+    end,
+
+    getSecWarning = function(ref)
+      return ref._SecurityWarn
+    end,
+
+    getSecCap = function(ref)
+      return ref._SecurityCap
+    end,
+	
+    getStatus = function(ref)
+      return ref.Status
+    end,
+      
+    getType = function(ref)
+      return ref._Type
+    end,
+    
+    getPartition = function(ref)
+      return ref._Partition
+    end,
+    
+    getNodeID = function(ref)
+      return ref._NodeID
+    end,
+    
+    getProductID = function(ref)
+      return ref._ProductID
+    end,
+    
+    getProductType = function(ref)
+      return ref._ProductType
+    end,
+    
+    getVendorName = function(ref)
+      return ref._VendorName
+    end,
+    
+    getProtoVer = function(ref)
+      return ref._ProtoVer
+    end,
+    
+    getSecurityLevel = function(ref)
+      return ref._SecurityLevel
+    end,
+   
+    getSecLevelDesc = function(ref)
+      local SecurLevelMap = {
+        {['bits'] = 4,   ['seclev']  = "S2_L3"},
+        {['bits'] = 2,   ['seclev']  = "S2_L2"},
+        {['bits'] = 1,   ['seclev']  = "S2_L1"},
+        }
+      if ref ==0 then
+        return sid["SID_None_Secured"]
+      end
+      if ref ==128 then
+        return "S0"
+      end
+      for _, v in pairs(SecurLevelMap) do
+        if bit32.band(ref,v.bits)== v.bits then
+          return v.seclev
+        end
+      end
+    end,
+    
+    getCapabilities = function(ref)
+      return ref._Capabilities
+    end,
+    
+    getWakeupInterval = function(ref)
+      return ref._WakeupInterval
+    end,
+    
+    getState = function(ref)
+      return ref._stateObj
+    end,
+    getName = function(ref)
+      return ref.Name == "" and (sid["SID_DEVICE"] .. " " .. ref.id) or ref.Name
+    end,
+    getMode = function(ref)
+      local mode = ref._stateObj.Mode
+      return mode["@enum"]["Val"]
+    end,
+    getLocation = function(ref)
+      return ref._Location
+    end,
+    
+    getDeviceStatus = function(ref)
+      return ref._DeviceStatus
+    end,
+    getBattery = function(ref)
+      local ans = 0
+      
+      if(ref._stateObj ~= nil)then
+        if(ref._stateObj.Battery ~= nil)then
+          ans = ref._stateObj.Battery["@pp"] or 0
+        end
+      end
+      return ans / 100
+    end,
+    isLowBattery = function(ref)
+      local lowBattery = 0
+      if(ref._stateObj ~= nil)then
+        if(ref._stateObj.Battery ~= nil)then
+          lowBattery = ref._stateObj.Battery["@loBat"] or 0
+        end
+      end
+      return lowBatter
+    end,
+    hasBattery = function(ref)
+      if(ref._stateObj ~= nil)then
+        if(ref._stateObj.Battery ~= nil)then
+          return true
+        end
+      end
+      return false
+    end,
+    serialize = function(ref)
+      local table = {}
+      for k,v in pairs(ref)do
+        local typeVal = type(v)
+        if(typeVal ~= "function")then
+          
+          table[k] = v
+        end
+      end
+      return json.encode(table)
+    end,
+    
+    getCCSupport = function(ref)
+      return ref._CCSupport
+    end,
+    
+    initFromJson = function(ref,table)
+      for k, v in pairs(table) do
+        ref[k] = v
+      end
+    end,
+    
+    update = function(ref,newStateObj)
+    local hasChanged = false
+    local deviceObj = json.decode(ref:serialize())
+    local hasChanged = private.updateDeviceObj(deviceObj,newStateObj)
+    if hasChanged == true then
+      ref:initFromJson(deviceObj)
+    end
+    return hasChanged
+    end  
+  },{})
+  
+end
+
+function private.updateDeviceObj(obj1,obj2)
+  local hasUpdated = false
+  for key2,val2 in pairs(obj2) do
+    if type(val2) ~= 'table' then 
+      if obj1[key2] ~=nil and obj1[key2]~=val2 then
+        obj1[key2] = val2
+        hasUpdated = true
+      end
+    elseif obj1[key2]~=nil then
+      hasUpdated = hasUpdated or private.updateDeviceObj(obj1[key2],val2)   
+    elseif private.isDeviceStatusKey(key2) then
+        hasUpdated = hasUpdated or private.updateDeviceObj(obj1["_stateObj"],val2)
+    end
+  end
+  return hasUpdated
+end
+
+function private.isDeviceStatusKey(key)
+  local statusKeyList = {"@Lock","@Switch","@WaterValve","@Dimmer","@Controller","@Thermostat","@Unknown"}
+  for _,val in pairs(statusKeyList) do
+    if key == val then
+      return true
+    end
+  end
+  return false     
+end 
+
+return public
+  
+  
+  
+  
+
+
+
+        

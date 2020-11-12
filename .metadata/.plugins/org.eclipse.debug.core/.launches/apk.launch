@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.crank.gdt.ui.export.GREExport">
+<booleanAttribute key="export.compile_lua" value="false"/>
+<booleanAttribute key="gre.export.condensed_output" value="true"/>
+<stringAttribute key="gre.export.gde_file" value="Quicksilver_GUI_1024x600.gde"/>
+<mapAttribute key="gre.export.packaging.attrs">
+<mapEntry key="android.apk_name" value="Quicksilver_GUI_1024x600.apk"/>
+<mapEntry key="android.app_name" value="Quicksilver_GUI_1024x600"/>
+<mapEntry key="android.app_orientation" value="landscape"/>
+<mapEntry key="android.app_permissions" value="android.permission.INTERNET -- android.permission.READ_EXTERNAL_STORAGE"/>
+<mapEntry key="android.app_scaled" value="false"/>
+<mapEntry key="android.command_line" value="-olua,hold=0 -vvvvv"/>
+<mapEntry key="android.fullscreen" value="false"/>
+<mapEntry key="android.keystore_alias" value="android"/>
+<mapEntry key="android.keystore_alias_password" value="GripPrevails"/>
+<mapEntry key="android.keystore_location" value="C:\Users\231585\grip-gui\platform.keystore"/>
+<mapEntry key="android.keystore_password" value="GripPrevails"/>
+<mapEntry key="android.large_icon_default" value="true"/>
+<mapEntry key="android.manifest_location" value="C:\Users\231585\grip-gui\config\AndroidManifest.xml"/>
+<mapEntry key="android.med_icon_default" value="true"/>
+<mapEntry key="android.package_name" value="com.storyboard.Quicksilver_GUI_1024x600"/>
+<mapEntry key="android.runtime_path" value="C:\Program Files\Crank_Software\Storyboard_Engine\5.3.201807051156\android-armle-opengles_2.0-obj"/>
+<mapEntry key="android.scale_options" value="none"/>
+<mapEntry key="android.small_icon_default" value="true"/>
+<mapEntry key="android.use_default_manifest" value="false"/>
+<mapEntry key="android.user_lib_location" value="C:\Users\231585\grip-gui\config\library_path.txt"/>
+<mapEntry key="android.version_code" value="1"/>
+<mapEntry key="android.version_name" value="1.0"/>
+</mapAttribute>
+<stringAttribute key="gre.export.packaging.name" value="package.android"/>
+<stringAttribute key="gre.export.resources" value="ssl,fontconfig,viewmodel,languages,events,config,fonts,images,scripts"/>
+<stringAttribute key="gre.export.sb.project" value="Quicksilver_GUI"/>
+<mapAttribute key="gre.export.transfer.attrs">
+<mapEntry key="filesystem.output_dir" value="C:\Users\231585\grip-gui"/>
+<mapEntry key="filesystem.use_home" value="true"/>
+</mapAttribute>
+<stringAttribute key="gre.export.transfer.name" value="transfer.filesystem"/>
+<stringAttribute key="gre.export.workspace_configuration" value="true"/>
+</launchConfiguration>

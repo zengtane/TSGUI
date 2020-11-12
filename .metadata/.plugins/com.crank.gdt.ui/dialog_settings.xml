@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<section name="Workbench">
+	<item value="700" key="DIALOG_WIDTH"/>
+	<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+	<item value="External" key="last_render_ext"/>
+	<item value="565" key="DIALOG_HEIGHT"/>
+	<item value="559" key="DIALOG_X_ORIGIN"/>
+	<item value="170" key="DIALOG_Y_ORIGIN"/>
+	<section name="newaction2">
+		<item value="1920" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="1030" key="DIALOG_HEIGHT"/>
+		<item value="9" key="DIALOG_X_ORIGIN"/>
+		<item value="9" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="newcontrol">
+	</section>
+	<section name="composite font dialog">
+		<item value="454" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="452" key="DIALOG_HEIGHT"/>
+		<item value="742" key="DIALOG_X_ORIGIN"/>
+		<item value="223" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="sample_import">
+	</section>
+	<section name="newvariable">
+		<item value="700" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="727" key="DIALOG_HEIGHT"/>
+		<item value="24" key="DIALOG_X_ORIGIN"/>
+		<item value="-179" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="newtable.settings">
+		<item value="true" key="autofitheight"/>
+		<item value="1" key="numrows"/>
+		<item value="50" key="cellheight"/>
+		<item value="50" key="lastWidth"/>
+		<item value="1" key="numcols"/>
+		<item value="true" key="autofitwidth"/>
+		<item value="0" key="lastY"/>
+		<item value="50" key="lastHeight"/>
+		<item value="50" key="cellwidth"/>
+		<item value="0" key="lastX"/>
+	</section>
+	<section name="newcontrol.settings">
+		<item value="50" key="lastWidth"/>
+		<item value="0" key="lastY"/>
+		<item value="50" key="lastHeight"/>
+		<item value="0" key="lastX"/>
+	</section>
+	<section name="data value dialog">
+		<item value="749" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="505" key="DIALOG_HEIGHT"/>
+		<item value="595" key="DIALOG_X_ORIGIN"/>
+		<item value="188" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="newevent">
+		<item value="1461" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="506" key="DIALOG_HEIGHT"/>
+		<item value="-431" key="DIALOG_X_ORIGIN"/>
+		<item value="33" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="FilteredConfigurationSelectionDialogSettings">
+		<item value="true" key="ShowStatusLine"/>
+		<item value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&#x0D;&#x0A;&lt;History&gt;&#x0D;&#x0A;&lt;historyRootNode&gt;&#x0D;&#x0A;&lt;infoNode/&gt;&#x0D;&#x0A;&lt;infoNode/&gt;&#x0D;&#x0A;&lt;/historyRootNode&gt;&#x0D;&#x0A;&lt;/History&gt;" key="History"/>
+		<section name="DialogBoundsSettings">
+			<item value="600" key="DIALOG_WIDTH"/>
+			<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+			<item value="500" key="DIALOG_HEIGHT"/>
+			<item value="609" key="DIALOG_X_ORIGIN"/>
+			<item value="213" key="DIALOG_Y_ORIGIN"/>
+		</section>
+	</section>
+	<section name="newtable">
+		<item value="700" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="826" key="DIALOG_HEIGHT"/>
+		<item value="559" key="DIALOG_X_ORIGIN"/>
+		<item value="9" key="DIALOG_Y_ORIGIN"/>
+	</section>
+	<section name="newappwizard">
+		<item value="800" key="w"/>
+		<item value="480" key="h"/>
+	</section>
+	<section name="model_selection_dialog">
+		<item value="700" key="DIALOG_WIDTH"/>
+		<item value="1|Segoe UI|9.0|0|WINDOWS|1|-15|0|0|0|400|0|0|0|1|0|0|0|0|Segoe UI" key="DIALOG_FONT_NAME"/>
+		<item value="609" key="DIALOG_HEIGHT"/>
+		<item value="226" key="DIALOG_X_ORIGIN"/>
+		<item value="9" key="DIALOG_Y_ORIGIN"/>
+	</section>
+</section>

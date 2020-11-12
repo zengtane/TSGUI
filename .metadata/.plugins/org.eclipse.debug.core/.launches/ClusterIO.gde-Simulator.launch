@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.crank.gdt.simulator.launching.GRELaunch">
+<stringAttribute key="gre.gde.file" value="ClusterIO.gde"/>
+<stringAttribute key="gre.location" value="C:\Program Files\Crank_Software\Storyboard_Engine\5.3.201807051156\win32-x86-opengles_2.0-obj"/>
+<stringAttribute key="gre.options" value="-v"/>
+<listAttribute key="gre.plugin.list"/>
+<listAttribute key="gre.plugin.not.selected.list"/>
+<mapAttribute key="gre.plugin.options">
+<mapEntry key="libgre-plugin-capture-playback.dll" value=""/>
+<mapEntry key="libgre-plugin-gesture.dll" value=""/>
+<mapEntry key="libgre-plugin-greio.dll" value="-ogreio,channel=cluster"/>
+<mapEntry key="libgre-plugin-logger.dll" value=""/>
+<mapEntry key="libgre-plugin-lua.dll" value=""/>
+<mapEntry key="libgre-plugin-luagredom.dll" value=""/>
+</mapAttribute>
+<stringAttribute key="gre.sb.project" value="ClusterIO"/>
+</launchConfiguration>

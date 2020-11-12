@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.crank.gdt.ui.export.GREExport">
+<booleanAttribute key="export.compile_lua" value="false"/>
+<booleanAttribute key="gre.export.condensed_output" value="true"/>
+<stringAttribute key="gre.export.gde_file" value="Quicksilver_GUI_1024x600.gde"/>
+<stringAttribute key="gre.export.packaging.name" value="package.none"/>
+<stringAttribute key="gre.export.sb.project" value="Quicksilver_GUI"/>
+<mapAttribute key="gre.export.transfer.attrs">
+<mapEntry key="filesystem.output_dir" value="C:\Users\231585\grip-gui"/>
+<mapEntry key="filesystem.use_home" value="true"/>
+</mapAttribute>
+<stringAttribute key="gre.export.transfer.name" value="transfer.filesystem"/>
+<stringAttribute key="gre.export.workspace_configuration" value="true"/>
+</launchConfiguration>

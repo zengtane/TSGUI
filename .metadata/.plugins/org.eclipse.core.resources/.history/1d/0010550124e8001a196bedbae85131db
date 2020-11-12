@@ -1,0 +1,1301 @@
+require "QSTableView"
+require "QSSliderControl"
+local touchManager = require("TouchManager")
+local screenManager = require("ScreenManager")
+local zwaveList = require("ZWaveDeviceList")
+local zwaveDevice = require("ZWaveDevice")
+local zwaveCommands = require("ZwaveCommands")
+local dropdown = require ("DropdownList")
+local zwaveEvents = require ("ZWaveEvents")
+local zwaveDeviceManager = require("ZWaveDeviceManager")
+local animationManager = require("AnimationManager")
+local private = {}
+local public = {}
+
+local fixobj = nil
+private.tableView = nil
+private.filterIndex = 1
+private.modalAnimationID = nil
+private.table = {}
+private.devicesCount = 0
+private.addDevicesCount = 0;
+private.removeDevicesCount = 0;
+private.networkMode = {}
+private.enrollmentAnimId = nil
+private.thermostatTimerID = nil
+private.zwaveTimeOutID = nil
+private.screenHeight = 600
+private.isLocalInclusion = false
+private.bakIsOn = -1
+private.bakJam = -1
+private.bakStatus = {}
+private.setPointF = 1
+private.setPointC = 0.5
+private.deviceInfoText = "" --included/excluded device info, use to show on operational modal
+
+function private.getSecLevel(secLevel)
+  local SecurLevelMap = {
+    {['bits'] = 4,   ['seclev']  = "S2_L3"},
+    {['bits'] = 2,   ['seclev']  = "S2_L2"},
+    {['bits'] = 1,   ['seclev']  = "S2_L1"},
+    }
+  if secLevel ==0 then
+    return sid["SID_None_Secured"]
+  end
+  if secLevel ==128 then
+    return "S0"
+  end
+  for _, v in pairs(SecurLevelMap) do
+    if bit32.band(secLevel,v.bits)== v.bits then
+      return v.seclev
+    end
+  end
+end
+ 
+function OnZwaveListScreenShowPre(args)
+  if(private.tableView == nil)then
+    private.tableView = QSTableView(args.context_screen)
+  end
+  local table = {}
+  table["ZwaveTitleBar.Title.text"] = sid["SID_ZWAVE_DEVICES"]
+--  table[screenManager.getCurrentScreen() .. ".ZwaveAddDelModal.grd_y"] = -600
+  table[screenManager.getCurrentScreen() .. ".Mask.grd_hidden"] = 1
+  gre.set_data(table)
+  private.devicesCount = 0
+  private.hideAnmi = nil
+  private.modalAnimationID = nil
+  private.enrollmentAnimId = nil
+  private.showZwaveDeviceByFilterType(private.filterIndex)
+end
+
+function OnScreenHidePre_ZwaveListScreen()
+--  animationManager.stop(private.modalAnimationID)
+--  animationManager.stop(private.enrollmentAnimId)
+--  animationManager.stop(private.hideAnmi)
+  private.hideAnmi = nil
+  private.modalAnimationID = nil
+  private.private.hideAnmi = nil
+  animationManager.destroyAll()
+end
+function private.showZwaveDeviceByFilterType(filterIndex)
+
+  if(touchManager.pressed == true)then
+    local func = function()
+      private.showZwaveDeviceByFilterType(filterIndex)
+    end
+    touchManager.addCallBackOnRelease("ZwaveListScreen",func)
+    return
+  end
+  
+  private.filterIndex = filterIndex
+  local root = {}
+  root.parent = "ZwaveContent"
+  root.layerHeight = 400
+  if(filterIndex == 1)then
+    --filter by type
+    local visited = {}
+    root.titles = {}
+    for i, zwave in pairs(private.table)do
+      local t = zwave._Type
+      -- if(t ~= "Controller")then
+      if(zwave.id ~= zwaveEvents.ControllerID)then
+        if(visited[t] == nil)then
+          table.insert(root.titles,{id = t,cells={}})
+          visited[t] = #root.titles
+        end
+        local cV = root.titles[visited[t]]
+        table.insert(cV.cells,zwave.id)
+     
+      end
+    end
+  else
+    local sortByName = function(list, part,ascend)
+      local copy = {}
+      local ci = 0
+      for i, v in pairs(list)do
+        --if(v:getPartition() == part)then
+        ci = ci + 1
+        copy[ci] = v
+        --end
+      end
+      local sortA = function( a,b ) return string.lower(a:getName()) < string.lower(b:getName()) end
+      local sortD = function( a,b ) return string.lower(a:getName()) > string.lower(b:getName()) end
+      local sort_func = ascend == true and sortA or sortD
+      table.sort( copy, sort_func )
+      return copy
+    end
+    local sortedTable = sortByName(private.table,1,true)
+    root.titles = {{id = sid["SID_NAME"], cells = {}}}
+    local title = root.titles[1]
+    title.id = sid["SID_NAME"]
+    for i, zwave in pairs(sortedTable)do
+      local t = zwave._Type
+      if(zwave.id ~= zwaveEvents.ControllerID)then
+        table.insert(title.cells,zwave.id)
+      end
+    end
+  end
+  private.tableView:createTable(root,private.constructTitleFunc,private.constructTableCellFunc)
+
+end
+
+function private.initiateDimmerCell(root,cell)
+  local data = {}
+  local obj = private.table[cell.id]
+  data[cell.path .. ".Slider.grd_hidden"] = 0
+  local val = obj["_stateObj"]["@pp"]
+  local cont = cell.path .. ".Slider"
+  local vars = {"x"}
+  local offset = -30
+  local sliderRange = {(32-offset),(223-offset)}
+  local valueRange = {0,99}
+  local pressFunc = function(ref)
+    ref.TimerId = gre.timer_set_interval(function() zwaveCommands.setValue(obj,ref:getValue()) end,500)
+  end
+  local moveFunc = function(ref)
+    local table = {}
+    if(ref:getValue() == 0)then
+      table[cell.path .. ".Slider.color"] = 0x707070
+    else
+      table[cell.path .. ".Slider.color"] = 0xFEC222
+    end
+    local on = ref:getValue() > 0
+    local text = on and sid["SID_ON"] or sid["SID_OFF"]
+    table[cell.path .. ".Subtext.text"] = text .. " - " .. ref:getPercentage() .. " %"
+    gre.set_data(table)
+  end
+  local releaseFunc = function(ref)
+    if ref.TimerId ~= nil then
+      gre.timer_clear_interval(ref.TimerId)
+      ref.TimerId = nil
+    end
+    local table = {}
+    if(ref:getValue() == 0)then
+      table[cell.path .. ".Slider.color"] = 0x707070
+    else
+      table[cell.path .. ".Slider.color"] = 0xFEC222
+    end
+    zwaveCommands.setValue(obj,ref:getValue())
+    gre.set_data(table)
+  end
+  cell.slider = newQSSliderControl(val, cont,vars,true,offset,sliderRange,valueRange,false,pressFunc,releaseFunc,moveFunc)
+  gre.set_data(data)
+end
+
+function private.getZwaveTitle(id)
+  local deviceTypeMap = {
+    ["Thermostat"] = sid["SID_THERMOSTAT"], 
+    ["Dimmer"] = sid["SID_DIMMER"],
+    ["Lock"] = sid["SID_DOOR_LOCK"],
+    ["Garage"] = sid["SID_GARAGE_DOOR"],
+    ["Switch"] = sid["SID_SWITCH"],
+    ["WaterValve"] = sid["SID_WATER_VALVE"],
+    ["Controller"] = sid["SID_CONTROLLER"]
+  }
+  local title = "Unkown" 
+  if private.filterIndex == 1 and deviceTypeMap[id] ~= nil then -- selected deivce type
+    title = deviceTypeMap[id] 
+  else
+    title = id
+  end
+  return title
+end
+function private.constructTitleFunc(root, title)
+  local titleTemplate = "ZwaveContent.TitleBar"
+  local p = "TitleBar_".. title.id
+  local data = {}
+  if(title.path == nil)then
+    gre.clone_object(titleTemplate,p,root.parent)
+    title.path = root.parent .. "." .. p
+  end
+  
+  data[title.path .. ".Text.text"] = private.getZwaveTitle(title.id)
+  if(title.show)then
+    title.buttonImages = res["RES_ARROW_UP"]
+  else
+    title.buttonImages = res["RES_ARROW_DOWN"]
+  end
+  data[title.path..".Collapse.image"] = title.buttonImages.up
+  gre.set_data(data)
+  return 75
+end
+function private.constructTableCellFunc(root, cell)
+  local data = {}
+ 
+  local obj = private.table[cell.id]
+  local titleTemplate = "ZwaveContent.Device"
+  local p = "Device_".. cell.id
+  if(cell.path == nil)then
+    gre.clone_object(titleTemplate,p,root.parent)
+    cell.path = root.parent .. "." .. p
+    if(obj._Type == "Dimmer")then
+      private.initiateDimmerCell(root,cell)
+    elseif (obj._Type ~= "Thermostat") then
+      data[cell.path .. ".Toggle.grd_hidden"] = 0
+    end
+  end
+  cell.toggleImages = nil
+  data[cell.path ..".SetpointDownButton.grd_hidden"] = 1
+  data[cell.path ..".SetpointUpButton.grd_hidden"] = 1
+  data[cell.path ..".SetpointTemp.grd_hidden"] = 1
+  data[cell.path ..".Toggle.grd_hidden"] = 1
+  data[cell.path ..".Slider.grd_hidden"] = 1
+  data[cell.path .. ".SecWarning.grd_hidden"] = 1;
+  local isOn = obj["_stateObj"]["@sw"] == 1
+  
+
+  local text = ""
+  data[cell.path .. ".Text.text"] = obj:getName()
+  
+  if(obj:getStatus() == "Up" or obj:getStatus() == "Added")then
+    data[cell.path .. ".FailedNode.grd_hidden"] = 1
+    data[cell.path .. ".Fix.grd_hidden"] = 1 
+  elseif(obj:getStatus() == "Down" )then
+    data[cell.path .. ".FailedNode.grd_hidden"] = 0
+    data[cell.path .. ".Fix.grd_hidden"] = 0
+  end
+  if(obj:getCCSupport()==1) then
+    data[cell.path .. ".Fix.grd_hidden"] = 0
+  end
+
+  -- if(isOn ~= private.bakIsOn)then
+  --   data[cell.path..".doorLockStatus.grd_hidden"] = 1
+  --   private.bakIsOn = isOn
+  -- else
+
+  if(isOn ~= private.bakStatus[cell.id])then
+    data[cell.path..".doorLockStatus.grd_hidden"] = 1
+    private.bakStatus[cell.id] = isOn
+  else
+    
+  end
+
+  if(obj._Type == "Lock" or obj._Type == "Garage")then
+    local jam = obj["_stateObj"]["Jam"] == 1
+
+    if(jam == true)then
+      print("door lock jammed")
+      data[cell.path .. ".doorLockStatus.text"] = "Jam"
+      data[cell.path..".doorLockStatus.grd_hidden"] = 0
+    else
+       data[cell.path..".doorLockStatus.grd_hidden"] = 1
+    end
+    
+  else
+  end
+
+ if(obj:getSecWarning() == 3)then
+    data[cell.path .. ".Toggle.grd_hidden"] = 1
+    data[cell.path .. ".Slider.grd_hidden"] = 1
+    data[cell.path .. ".SetpointTemp.grd_hidden"] = 1
+    data[cell.path .. ".SetpointUpButton.grd_hidden"] = 1
+    data[cell.path .. ".SetpointDownButton.grd_hidden"] = 1
+  end
+    
+  if(obj._Type == "Switch")then
+    cell.toggleImages = isOn and res["RES_DEVICE_TOGGLE_SMALL_LIGHT_ON"] or res["RES_DEVICE_TOGGLE_SMALL_LIGHT_OFF"]
+    text = isOn and sid["SID_ON"] or sid["SID_OFF"]
+  elseif(obj._Type == "Controller")then
+    data[cell.path..".Toggle.grd_hidden"] = 1
+  elseif(obj._Type == "Garage")then
+    cell.toggleImages = isOn and res["RES_DEVICE_TOGGLE_SMALL_GARAGE_ON"] or res["RES_DEVICE_TOGGLE_SMALL_GARAGE_OFF"]
+    text = isOn and sid["SID_DEVICE_OPEN"] or sid["SID_DEVICE_CLOSED"]
+  elseif(obj._Type == "Lock")then
+    
+    if(obj:getSecWarning() == 1)then
+      data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+      data[cell.path .. ".SecWarning.text"] = sid["SID_S2_SECURED_WARNING"]
+    elseif(obj:getSecWarning() == 2)then
+    data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+      data[cell.path .. ".SecWarning.text"] = sid["SID_S2_INCLUDED_WITHOUT_HIGHEST_LEVEL"]
+    elseif(obj:getSecWarning() == 3)then
+      data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+      data[cell.path .. ".SecWarning.text"] = sid["SID_S0_NONE_SECURED"]
+    end
+    --if(obj:hasBattery()) then 
+      --if(obj:isLowBattery() == 1)then
+        --data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+        --data[cell.path .. ".SecWarning.text"] = "WARNING: Low-battery,the battery level is"+tostring(obj:getBattery())
+      --end
+    --else
+      --data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+      --data[cell.path .. ".SecWarning.text"] = "WARNING: NO battery"
+    --end
+    if(obj["_stateObj"]["Jam"] == 1) then 
+      cell.toggleImages = res["RES_DEVICE_TOGGLE_SMALL_LOCK_JAM"]
+      text = sid["SID_DEVICE_JAMMED"]
+    else
+      cell.toggleImages = isOn and res["RES_DEVICE_TOGGLE_SMALL_LOCK_ON"] or res["RES_DEVICE_TOGGLE_SMALL_LOCK_OFF"]
+      text = isOn and sid["SID_LOCKED"] or sid["SID_UNLOCKED"]
+    end
+  elseif(obj._Type == "WaterValve")then
+    cell.toggleImages = isOn and res["RES_DEVICE_TOGGLE_SMALL_TAP_ON"] or res["RES_DEVICE_TOGGLE_SMALL_TAP_OFF"]
+    text = isOn and sid["SID_ON"] or sid["SID_OFF"]
+  elseif(obj._Type == "Dimmer")then    
+    if(obj:getStatus() == "Down")then
+      data[cell.path .. ".Slider.grd_hidden"] = 1
+    elseif((obj:getStatus() == "Up" or obj:getStatus() == "Added") and obj:getSecWarning() ~=3)then
+      local val = obj["_stateObj"]["@pp"]
+      if(val == 0)then
+        data[cell.path .. ".Slider.color"] = 0x707070
+      else
+        data[cell.path .. ".Slider.color"] = 0xFEC222
+      end
+      cell.slider:setValue(val)
+      data[cell.path .. ".Slider.grd_hidden"] = 0
+      text = isOn and sid["SID_ON"] or sid["SID_OFF"]
+      text = text .. " - " .. cell.slider:getPercentage() .. "%"
+    end
+  elseif (obj._Type == "Thermostat") then
+    local thermostatModeIndex = obj["_stateObj"]["Mode"]["@enum"]["Val"]
+    local modeList =  obj["_stateObj"]["Mode"]["@enum"]["ENUM"]
+    local mode = nil
+    if(obj:getStatus() == "Down" or obj:getCCSupport()==1)then
+      data[cell.path .. ".SetpointTemp.grd_hidden"] = 1
+      data[cell.path .. ".SetpointDownButton.grd_hidden"] = 1
+      data[cell.path .. ".SetpointUpButton.grd_hidden"] = 1
+    -- elseif(obj:getStatus() == "Up"and obj:getSecWarning() ~=3)then
+    elseif((obj:getStatus() == "Up" or obj:getStatus() == "Added") and obj:getCCSupport()==0)then
+      data[cell.path .. ".SetpointTemp.grd_hidden"] = 0
+      data[cell.path .. ".SetpointDownButton.grd_hidden"] = 0
+      data[cell.path .. ".SetpointUpButton.grd_hidden"] = 0
+    
+    for key,val in pairs(modeList) do
+      if val == thermostatModeIndex then
+        mode = key
+        break
+      end
+    end
+    -- low battery alert
+    --if(obj:hasBattery()) then 
+      --if(obj:isLowBattery() == 1)then
+        --data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+        --data[cell.path .. ".SecWarning.text"] = "WARNING: Low-battery,the battery level is"+tostring(obj:getBattery())
+      --end
+    --else
+      --data[cell.path .. ".SecWarning.grd_hidden"] = 0;
+      --data[cell.path .. ".SecWarning.text"] = "WARNING: NO battery"
+    --end
+    
+    local modeList = {
+      ["Auto"] = sid["SID_AUTO"],
+      ["Heat"] = sid["SID_HEAT"],
+      ["AuxHeat"] = sid["SID_EMERGENCY_HEAT"],
+      ["Cool"] = sid["SID_COOL"],
+      ["EcoHeat"] = sid["SID_ENERGY_SAVE_HEAT"],
+      ["EcoCool"] = sid["SID_ENERGY_SAVE_COOL"],
+      ["Off"] = sid["SID_OFF"],
+      ["Unknown"] = sid["SID_UNKNOWN"]
+      }
+
+    if(mode ~= nil) then
+      text = modeList[mode]
+    end
+    data[cell.path..".SetpointTemp.grd_hidden"] = 0
+    if mode~="Off" and mode~="Auto" and mode~="AuxHeat" and mode~="Unknown" and mode ~= nil then
+      data[cell.path..".SetpointDownButton.grd_hidden"] = 0
+      data[cell.path..".SetpointUpButton.grd_hidden"] = 0
+      --data[cell.path..".SetpointTemp.temp"] = obj["_stateObj"]["Setpoint"][mode]["@temp"]["Val"]
+      data[cell.path..".SetpointTemp.text"] = obj["_stateObj"]["Setpoint"][mode]["@temp"]["Val"]
+      local isHeat = mode == "Heat" or mode =="EcoHeat"
+      data[cell.path..".SetpointTemp.color"] = isHeat == true and 0xF36F20 or 0x1792e5
+    else
+      data[cell.path..".SetpointDownButton.grd_hidden"] = 1
+      data[cell.path..".SetpointUpButton.grd_hidden"] = 1
+      local temp = obj["_stateObj"]["ThermoMeter"]["@temp"]["Val"]
+      data[cell.path..".SetpointTemp.text"] = tonumber(string.format("%.2f", temp))
+      data[cell.path..".SetpointTemp.color"] = 0x707070
+    end
+    end
+  end
+  if(obj._Favorite == 0)then
+    data[cell.path .. ".Favorite.image"] = res["RES_DEVICE_IS_NOT_FAVORITE_ICON"]
+  else
+    data[cell.path .. ".Favorite.image"] = res["RES_DEVICE_IS_FAVORITE_ICON"]
+  end
+  if(cell.toggleImages ~= nil)then
+    if((obj:getStatus() == "Up" or obj:getStatus() == "Added" )and obj:getSecWarning() ~=3)then
+      data[cell.path .. ".Toggle.image"] = cell.toggleImages.up
+      data[cell.path .. ".Toggle.grd_hidden"] = 0
+    elseif(obj:getStatus() == "Down")then
+      data[cell.path .. ".Toggle.grd_hidden"] = 1
+    
+    end
+  end
+  data[cell.path .. ".Subtext.text"] = text
+  gre.set_data(data)
+  return 110 
+end
+
+
+function private.updateRPandRMModalDeviceCount(count, add)
+  local table = {}
+  local plural = count > 1 and sid["SID_DEVICES"] or sid["SID_DEVICE"]
+  local action = add == true and sid["SID_REMOVED"] or sid["SID_REPLACED"]
+  table["ZwaveAddDelModal.Group.devices.text"] = count .. " " .. plural .. " " .. action
+  gre.set_data(table)
+end
+function private.animateModalSpinner()
+  if(private.enrollmentAnimId == nil)then
+    local steps =
+    {
+      {
+        from = 0,
+        to = 359,
+        key = "ZwaveAddDelModal.Group.spinner.angle",
+        duration = 1000
+      }
+    }
+    
+    private.enrollmentAnimId = animationManager.createLoop(steps)
+  end
+  animationManager.play(private.enrollmentAnimId)
+end
+
+function private.getDevicesText(mode)
+  local plural = ""
+  local deviceText = ""
+  if mode == sid["SID_Add"] then
+    plural = private.addDevicesCount >1 and sid["SID_DEVICES"] or sid["SID_DEVICE"]
+    deviceText = private.addDevicesCount .. " " .. plural .. " " .. sid["SID_INCLUDED"]
+  end
+  if mode == sid["SID_REMOVE"] then
+    plural = private.removeDevicesCount >1 and sid["SID_DEVICES"] or sid["SID_DEVICE"]
+    deviceText = private.removeDevicesCount .. " " .. plural .. " " .. sid["SID_EXCLUDED"]
+  end
+  return deviceText;
+end
+
+function private.updateModal(attrs)
+  attrs["deviceinfo"]["text"] = private.deviceInfoText
+  print("updateModal***" ..private.deviceInfoText)
+  local table = {}
+  
+  local rootEle = "ZwaveAddDelModal.Group"
+  for ele, attr in pairs(attrs) do
+    if type(attr) == "table" then
+      if attr["text"] ~= nil then
+        table[rootEle ..".".. ele..".text"]=attr["text"]
+      end
+      if attr["grd_hidden"] ~= nil then
+        table[rootEle ..".".. ele..".grd_hidden"] =attr["grd_hidden"];
+      end
+    end
+  end
+  
+  print("updateModal table*** "..json.encode(table))
+  gre.set_data(table);
+
+end
+
+function private.ZwaveOpertionTimeOut(attrs)
+   if private.zwaveTimeOutID ~= nil then
+      gre.timer_clear_timeout(private.zwaveTimeOutID)
+      private.zwaveTimeOutID = nil;
+    end
+    private.zwaveTimeOutID = gre.timer_set_timeout(
+          function () 
+            attrs.text.text = "";
+            attrs.warning.text = sid["SID_SYSTEM_BUSY"];
+            attrs.warning.grd_hidden = 0;
+            private.updateModal(attrs)
+          end
+        ,10000)
+end
+
+function private.updateModalDeviceCountWithInfo(obj)
+  local text = "ID:" .. obj.id  
+    .."\n".. sid["SID_SECURITY_LEVEL"] .. private.getSecLevel(obj._SecurityLevel)
+    .."\n".. sid["SID_DEVICE_TYPE"] .. ": ".. obj._Type 
+    .."\n".. sid["SID_NODE_ID"] .. obj._NodeID 
+    .."\n".. sid["SID_VENDOR_NAME"] .. obj._VendorName
+  private.deviceInfoText = text;
+end
+
+function private.showModalAnimi()
+  if private.modalAnimationID == nil then
+    local steps = 
+    {
+      {
+          rate = "easeout",
+          to = 70,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".Mask.Mask.alpha"
+        },
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".Mask.grd_hidden"
+        },--show
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1000,
+          key =screenManager.getCurrentScreen() ..".ZwaveAddDelModal.grd_y"
+        },
+        {
+          rate = "easeout",
+          to = 0,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".ZwaveAddDelModal.grd_hidden"
+        },
+      }
+      
+     private.modalAnimationID = animationManager.create(steps)
+  end
+  animationManager.play(private.modalAnimationID)
+end
+
+function private.showModal(title, body, button)
+  private.initModalButtons()
+  local duration = 1000
+  local table = {}
+  table["ZwaveAddDelModal.Group.warning.grd_hidden"] = 1
+  table["ZwaveAddDelModal.Group.text.text"] = body
+  table["ZwaveAddDelModal.Group.title.text"] = title
+  table["ZwaveAddDelModal.Group.button.text"] = button
+  table["ZwaveAddDelModal.Group.spinner.grd_hidden"] = 1
+  table["ZwaveAddDelModal.Group.deviceinfo.text"] = ""
+  gre.set_data(table)
+  private.showModalAnimi();
+end
+
+function public.showModal(modalAttrs,initStatus)
+  private.showModalAnimi()
+  if initStatus == nil  then -- system busy message only show by clicking [inclusion/exclusion/exclude another] on sreen
+    private.addDevicesCount = 0;
+    private.removeDevicesCount = 0;
+    private.deviceInfoText = "";
+    private.ZwaveOpertionTimeOut(modalAttrs)
+  end
+  private.updateModal(modalAttrs)
+end
+
+private.hideAnmi = nil
+function private.hideModal()
+  private.devicesCount = 0
+  private.addDevicesCount = 0;
+  private.removeDevicesCount = 0;
+  private.deviceInfoText = "";
+  if private.zwaveTimeOutID ~= nil then
+    gre.timer_clear_timeout(private.zwaveTimeOutID);
+    private.zwaveTimeOutID = nil
+  end
+  
+  if private.hideAnmi == nil then
+    local steps = 
+      {
+        {
+          rate = "easeinout",
+          to = 0,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".Mask.Mask.alpha"
+        },
+        {
+          rate = "easeinout",
+          to = 1,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".Mask.grd_hidden"
+        },
+        {
+          rate = "easeinout",
+          to = -private.screenHeight,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".ZwaveAddDelModal.grd_y"
+        },
+        {
+          rate = "easeinout",
+          to = 1,
+          duration = 1000,
+          key = screenManager.getCurrentScreen() ..".ZwaveAddDelModal.grd_hidden"
+        },
+      }
+     private.hideAnmi = animationManager.create(steps)
+  end
+  animationManager.play(private.hideAnmi)
+  animationManager.stop(private.enrollmentAnimId)
+end
+
+function private.initModalButtons()
+  local data = {}
+  data["ZwaveAddDelModal.Group.button.grd_hidden"] = 0
+  data["ZwaveAddDelModal.Group.exit.grd_hidden"] = 1
+  data["ZwaveAddDelModal.Group.leftButton.grd_hidden"] = 1
+  data["ZwaveAddDelModal.Group.rightButton.grd_hidden"] = 1
+  gre.set_data(data)
+end
+
+function OnZWaveTableViewTitleBarPressed(args)
+  local data = {}
+  local obj = private.tableView.pathToObj[args.context_group]
+  data.context = args
+  data.buttonImages = obj.buttonImages
+  data.releaseFunc = function(...)
+    obj.show = not obj.show
+    private.tableView:refreshTable()
+  end
+  touchManager.setUpTouchEvent(data)
+end
+--
+--
+--
+function OnZWaveListScreenTableCellToggle(args)
+  local data = {}
+  data.releaseFunc = function(...)
+    local cell = private.tableView.pathToObj[args.context_group]
+    local obj = private.table[cell.id]
+    if(obj:getCCSupport() == 0) then
+      if(obj:getSecWarning() ~= 3 and (obj:getStatus() == "Up" or obj:getStatus() == "Added"))then
+        screenManager.switchToNextScreen("ZwaveDeviceScreen",{id = cell.id})
+      end
+    end
+  end
+  touchManager.setUpTouchEvent(data)
+end
+function OnZwaveListScreenDeviceToggle(args)
+  local cell = private.tableView.pathToObj[args.context_group]
+  local obj = private.table[cell.id]
+  local d = {}
+
+  local data = {}
+  local v = obj["_stateObj"]["@sw"]
+  v = v == 1 and 0 or 1
+  if(obj._Type == "Lock" or obj._Type == "Garage")then
+    d[cell.path..".doorLockStatus.grd_hidden"] = 0
+    if(v == 1)then
+      if(obj._Type == "Lock")then
+        d[cell.path .. ".doorLockStatus.text"] = "closing"
+      else
+        d[cell.path .. ".doorLockStatus.text"] = "opening"
+      end
+      gre.set_data(d)
+    else
+      if(obj._Type == "Lock")then
+        d[cell.path .. ".doorLockStatus.text"] = "opening"
+      else
+        d[cell.path .. ".doorLockStatus.text"] = "closing"
+      end
+      gre.set_data(d)
+    end
+  end
+
+  data.buttonImages = cell.toggleImages
+  data.context = args
+  data.releaseFunc = 
+  function(...)
+    local val = obj["_stateObj"]["@sw"]
+    val = val == 1 and 0 or 1
+    zwaveCommands.setValue(obj,val)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+--[[
+function OnZwaveDeviceEditPressed_ZwaveListScreen(args)
+  local data = {}
+  data.releaseFunc = function(...)
+    local cell = private.tableView.pathToObj[args.context_group]
+    local obj = private.table[cell.id]
+    local data = {}
+    data.device = obj
+    screenManager.switchToNextScreen("DeviceSettingScreen",data)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+]]--
+function OnZwaveListScreenFavoritesToggle(args)
+  local data = {}
+  data.releaseFunc = function(...)
+    local cell = private.tableView.pathToObj[args.context_group]
+    local obj = private.table[cell.id]
+    zwaveCommands.setFavorite(obj.id,obj._Favorite == 1 and 0 or 1)
+    private.tableView:refreshTableCell(obj.id)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function OnZwaveListScreenAdd(args)
+  local data = {}
+  data.context = args
+  data.buttonImages = res["RES_ICON_ADD"]
+  data.releaseFunc = function(...)
+    zwaveCommands.enterInclusionMode()
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function OnZwaveListScreenDelete(args)
+  local data = {}
+  data.context = args
+  data.buttonImages = res["RES_ICON_DELETE"]
+  data.releaseFunc = function(...)
+    zwaveCommands.enterExclusionMode()
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function OnZwaveListScreenModalButtonPressed(args)
+  local data = {}
+  local value_table= gre.get_data("ZwaveAddDelModal.Group.leftButton.text")
+  local value= value_table["ZwaveAddDelModal.Group.leftButton.text"]
+
+  data.releaseFunc = function(...)
+    if(value == "Replace")then
+      zwaveCommands.replaceFailedNode(fixobj)
+    else
+      zwaveCommands.abortOperation()
+      private.hideModal()
+      onInitZwaveManagementScreen()
+    end
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function OnZWaveListScreenExcludeAnotherPressed(args)
+  local data ={}
+  local value_table= gre.get_data("ZwaveAddDelModal.Group.rightButton.text")
+  local value= value_table["ZwaveAddDelModal.Group.rightButton.text"]
+  data.releaseFunc = function(...)
+    if(value == "Remove")then
+      zwaveCommands.removeFailedNode(fixobj)
+    else
+      local attrs = {
+        warning = {text = "", grd_hidden = 1},
+        deviceinfo = {text = "", grd_hidden = 1},
+        rightButton = {text = sid["SID_EXCLUDE_ANOTHER"], grd_hidden = 1},
+        leftButton = {text = sid["SID_DONE"], grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = private.getDevicesText(sid["SID_REMOVE"]), grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_EXCLUSION_START_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_EXCLUSION"], grd_hidden = 0},
+        button = {text = sid["SID_DONE"], grd_hidden = 0},
+
+      }
+      private.updateModal(attrs)
+      private.ZwaveOpertionTimeOut(attrs)
+      
+      zwaveCommands.enterExclusionMode()
+    end
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function OnZwaveDeviceAddedListener(args)
+  print("OnZwaveDeviceAddedListener*****")
+  local str = args.context_event_data.device
+  local obj = json.decode(str)
+  private.table[obj.id] = zwaveDevice.initZWaveDevice(obj);
+  
+  private.updateModalDeviceCountWithInfo(obj)
+  if(screenManager.getCurrentScreen() == "ZwaveListScreen")then
+    private.showZwaveDeviceByFilterType(private.filterIndex)
+  end
+end
+function OnZwaveDeviceChangeListener(args)
+  print("OnZwaveDeviceChangeListener")
+  local str = args.context_event_data.device
+  local obj = json.decode(str)
+  private.table[obj.id] = zwaveDevice.initZWaveDevice(obj)
+  if(screenManager.getCurrentScreen() == "ZwaveListScreen")then
+    private.tableView:refreshTableCell(obj.id)
+  end
+end
+
+function OnZWaveDeleteDeviceEvent_ZwaveListScreen(args)
+  local str = args.context_event_data.device
+  local obj = json.decode(str)
+  private.table[obj.id] = nil
+ 
+  private.updateModalDeviceCountWithInfo(obj)
+  if(screenManager.getCurrentScreen() == "ZwaveListScreen")then
+    private.showZwaveDeviceByFilterType(private.filterIndex)
+  end
+end
+
+function OnFilterPressed_ZwaveListScreen(args)
+  local data = {}
+  data.context = args
+  data.buttonImages = res["RES_ICON_FILTER"]
+
+  local filterTypeList = {sid["SID_DEVICE_TYPE"],sid["SID_DEVICE_NAME"]}
+
+  local selectedFunc = function(index)
+    private.filterIndex = index
+    private.showZwaveDeviceByFilterType(private.filterIndex)
+  end
+  data.releaseFunc = function()
+    dropdown.show(700,20,250,160,filterTypeList,private.filterIndex,selectedFunc)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+
+function private.getWarningText(level,message)
+  local warningMap = {
+  [1]=sid["SID_UP_TO_SHARED_ZWAV_DEVICE"],
+  [2]=sid["SID_UP_TO_ZWAV_CONTROLLER"],
+  [3]=sid["SID_UP_TO_ZWAVE_LOCK"],
+  [4]=sid["SID_UP_TO_ZWAVE_THERMOSTATE"],
+  [5]=sid["SID_UP_TO_ZWAVE_GARAGE"],
+  [6]=sid["SID_UP_TO_ZWAVE_UNKNOWN_DEVICE"],
+  [34]=sid["SID_OPERATION_TIME_OUT"],
+  [35]=sid["SID_INCLUDED_INCOMPLETE_ERROR"]
+  }
+  local msg = nil 
+  if(level ~=nil)then
+   msg = warningMap[level]
+  else
+    msg = sid["SID_ADD_NODE_FAILS_WITH_UNKOWN_REASON"]
+  end
+  return msg;
+  
+end
+function OnZWaveModeChange_ZwaveManagement(args)
+  local data = args.context_event_data
+  local table = {}
+  local attrs = {};
+  
+  if(data.operation == private.networkMode.operation and data.status == private.networkMode.status)then
+    return
+  end
+  if(screenManager.getCurrentScreen() ~= "ZwaveListScreen" and screenManager.getCurrentScreen() ~= "ZwaveManagementScreen") then
+    return
+  end
+  private.networkMode = data
+  
+  if(private.zwaveTimeOutID ~=nil ) then 
+    gre.timer_clear_timeout(private.zwaveTimeOutID)
+    private.zwaveTimeOutID = nil;
+  end
+  
+  if(data.operation == "AddNode" )then
+    
+    if(data.status == "OpStart" or data.status == "OpBusy")then
+      attrs = {
+        warning = {text = "", grd_hidden = 1},
+        rightButton = { grd_hidden = 1},
+        leftButton = { grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = private.getDevicesText(sid["SID_Add"]), grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_INCLUSION_READY_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text =sid["SID_DONE"] , grd_hidden = 0},
+        deviceinfo = {text = "", grd_hidden = 0}
+      }
+      animationManager.stop(private.enrollmentAnimId)
+    elseif (data.status == "OpFailed") then
+      animationManager.stop(private.enrollmentAnimId)
+      local msg = ""
+      if(data.OpFailReason ~= nil and data.OpFailReason ~= 0) then
+        msg = private.getWarningText(data.OpFailReason)
+      else
+         msg = private.getWarningText()
+      end  
+       attrs = {
+        warning = {text = msg, grd_hidden = 0},
+        rightButton = {grd_hidden = 1},
+        leftButton = { grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = private.getDevicesText(sid["SID_Add"]), grd_hidden = 1},
+        text = {text = sid["SID_ZWAVE_INCLUSION_READY_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text = sid["SID_DONE"] , grd_hidden = 0},
+        deviceinfo = {text = "", grd_hidden =  1}
+      }
+      if data.OpFailReason == nil or data.OpFailReason ==0 then
+        private.updateModal(attrs)
+        return
+      end
+    elseif(data.status == "ProtocolDone")then
+      
+      private.animateModalSpinner()
+      attrs = {
+        warning = {text = "", grd_hidden = 1},
+        rightButton = { grd_hidden = 1 },
+        leftButton = { grd_hidden = 1 },
+        spinner = {grd_hidden = 0},
+        devices = {text = sid["SID_DEVICE_FOUND_PLEASE_WAIT"], grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_INCLUSION_READY_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text =sid["SID_DONE"] , grd_hidden = 0},
+        deviceinfo = {text = "", grd_hidden =  1 }
+      }
+    elseif(data.status == "GrantKeysRequset")then
+      private.csaPin = sid["SID_ENTER_CSA_PIN_ON_DEVICE"] .. data.CsaPin
+      attrs = {
+        warning = {text = "", grd_hidden = 1},
+        rightButton = { grd_hidden = 1},
+        leftButton = { grd_hidden = 1},
+        spinner = {grd_hidden = 0},
+        devices = {text = sid["SID_DEVICE_FOUND_PLEASE_WAIT"], grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_INCLUSION_READY_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text =sid["SID_DONE"] , grd_hidden = 0},
+        deviceinfo = {text = "", grd_hidden = 1 }
+      }
+      private.animateModalSpinner()
+    elseif(data.status == "EchoCSAPin")then
+    animationManager.stop(private.enrollmentAnimId)
+      attrs = {
+        warning = {text = "", grd_hidden = 1},
+        deviceinfo = {text = "", grd_hidden = 0},
+        rightButton = { grd_hidden = 1},
+        leftButton = { grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = private.getDevicesText(sid["SID_Add"]), grd_hidden = 0},
+        text = {text = private.csaPin, grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text =sid["SID_DONE"] , grd_hidden = 0},
+      }
+    elseif (data.status == "S2KeysRequset") then
+      local args = {}
+      args.prompt = sid["SID_ENTER_S2_PIN_PROMPT"]
+      args.callback = function(pin)
+        private.s2Pin = pin
+        local payload = {}
+        payload["DskPin"] = private.s2Pin .. data.DskPin
+        payload["operation"] = "DskKeysSet"
+        mqtt_client.publish("@/SET/Zwave/Network/Mode",json.encode(payload))
+        local attrs = {
+          warning = {text = "", grd_hidden = 1},
+          rightButton = { grd_hidden = 1},
+          leftButton = { grd_hidden = 1},
+          spinner = {grd_hidden = 0},
+          devices = {text = private.getDevicesText(sid["SID_Add"]), grd_hidden = 0},
+          text = {text = sid["SID_ZWAVE_INCLUSION_READY_MESSAGE"], grd_hidden = 0},
+          title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+          button = {text =sid["SID_DONE"] , grd_hidden = 0},
+          deviceinfo = {text = "", grd_hidden = 0},
+        }
+        public.showModal(attrs,true)
+        private.animateModalSpinner()
+      end-- function
+      initKeyboard(args)
+     
+    elseif(data.status == "OpDone")then
+      animationManager.stop(private.enrollmentAnimId)
+      private.addDevicesCount = private.addDevicesCount +1;
+      attrs = {
+        warning = {text = "", grd_hidden = 1},
+        rightButton = { grd_hidden = 1},
+        leftButton = { grd_hidden = 1},
+        spinner = {grd_hidden = 1},
+        devices = {text = private.getDevicesText(sid["SID_Add"]), grd_hidden = 0},
+        text = {text = sid["SID_ZWAVE_INLUSION_ENDED_MESSAGE"], grd_hidden = 0},
+        title = {text = sid["SID_ZWAVE_INCLUSION"], grd_hidden = 0},
+        button = {text =sid["SID_DONE"] , grd_hidden = 0},
+        deviceinfo = {text = "", grd_hidden = 0},
+        }
+    end
+    if next(attrs) ~= nil then
+      public.showModal(attrs,true)
+    end
+  elseif(data.operation == "RemoveNode")then
+    if(data.status == "OpStart" or data.status == "OpBusy")then 
+      animationManager.stop(private.enrollmentAnimId) 
+      private.deviceInfoText = sid["SID_UNKNOWN_DEVICE"].." "..sid["SID_EXCLUDED"]
+      attrs = {
+        warning = {text = "", grd_hidden = 1 },
+        deviceinfo = { text = "", grd_hidden = 1 },
+        rightButton = { text = sid["SID_EXCLUDE_ANOTHER"], grd_hidden = 1 },
+        leftButton = { text = sid["SID_DONE"], grd_hidden = 1},
+        spinner = { grd_hidden = 1 },
+        devices = { text = private.getDevicesText(sid["SID_REMOVE"]), grd_hidden = 0 },
+        text = { text = sid["SID_ZWAVE_EXCLUSION_READY_MESSAGE"], grd_hidden = 0 },
+        title = { text = sid["SID_ZWAVE_EXCLUSION"], grd_hidden = 0 },
+        button = { text = sid["SID_DONE"], grd_hidden = 0 },
+       }
+     
+    elseif(data.status == "ProtocolDone")then
+      private.animateModalSpinner()
+    elseif (data.status == "OpDone") then
+      animationManager.stop(private.enrollmentAnimId)
+      private.removeDevicesCount = private.removeDevicesCount +1;
+       attrs = {
+          title = {text = sid["SID_ZWAVE_EXCLUSION"] },
+          text = {text = sid["SID_ZWAVE_EXLUSION_ENDED_MESSAGE"] },
+          devices = {text = private.getDevicesText(sid["SID_REMOVE"]), grd_hidden = 0},
+          spinner = { grd_hidden = 1},
+          button = { grd_hidden = 1 },
+          leftButton = { text = sid["SID_DONE"], grd_hidden = 0 },
+          rightButton = { text = sid["SID_EXCLUDE_ANOTHER"], grd_hidden = 0 },
+          warning = {text = "", grd_hidden = 1},
+          deviceinfo = {text = "", grd_hidden = 0},
+        }
+    elseif (data.status == "OpFailed") then
+      animationManager.stop(private.enrollmentAnimId)
+      private.deviceInfoText = sid["SID_EXCLUDE_FAILED"]
+      attrs = {
+          title = {text = sid["SID_ZWAVE_EXCLUSION"] },
+          text = {text = sid["SID_EXCLUDE_FAILED"] },
+          devices = {text = private.getDevicesText(sid["SID_REMOVE"]), grd_hidden = 0},
+          spinner = {grd_hidden = 1},
+          button = {grd_hidden = 1 },
+          leftButton = { text = sid["SID_DONE"], grd_hidden = 0 },
+          rightButton = { text = sid["SID_EXCLUDE_ANOTHER"], grd_hidden = 0 },
+          warning = {text = "", grd_hidden = 1},
+          deviceinfo = { text = sid["SID_EXCLUDE_FAILED"], grd_hidden = 0},
+        }
+        private.updateModal(attrs)
+        return
+    end
+    if next(attrs) ~= nil then
+      public.showModal(attrs,true)
+    end
+  elseif(data.operation == "RemoveFailed")then
+    if(data.status == "OpStart")then
+      private.updateRPandRMModalDeviceCount(private.devicesCount,true)
+      private.showModal(sid["SID_Remove_Failed_Device"],sid["SID_START_REMOVING"],sid["SID_DONE"])
+      local table = {}
+      table["ZwaveAddDelModal.Group.spinner.grd_hidden"] = 0
+      gre.set_data(table)
+      private.animateModalSpinner()
+    elseif(data.status == "OpDone")then
+      animationManager.stop(private.enrollmentAnimId)
+      private.devicesCount = private.devicesCount + 1
+      private.updateRPandRMModalDeviceCount(private.devicesCount,true)
+      private.showModal(sid["SID_Remove_Failed_Device"],sid["SID_REMOVED"],sid["SID_DONE"])
+      if(zwaveDeviceManager.isRemoveAllFailedClick == true)then
+        zwaveDeviceManager.removeAllFailedDevices()
+      end
+    elseif(data.status == "OpBusy" or data.status == "OpFailed")then
+      animationManager.stop(private.enrollmentAnimId)
+      private.showModal(sid["SID_Remove_Failed_Device"],sid["SID_Remove_Failed_And_Try_Again"],sid["SID_DONE"])
+      if(zwaveDeviceManager.isRemoveAllFailedClick == true)then
+        zwaveDeviceManager.removeAllFailedDevices()
+      end
+    end
+  elseif(data.operation == "ReplaceNode")then
+    if(data.status == "OpStart")then
+      private.updateRPandRMModalDeviceCount(private.devicesCount,false)
+      private.showModal(sid["SID_Replace_Failed_Device"],sid["SID_START_REPLACING"],sid["SID_DONE"])
+      private.animateModalSpinner()
+    elseif(data.status == "OpDone")then
+      animationManager.stop(private.enrollmentAnimId)
+      private.devicesCount = private.devicesCount + 1
+      private.updateRPandRMModalDeviceCount(private.devicesCount,false)
+      private.showModal(sid["SID_Replace_Failed_Device"],sid["SID_REPLACED"],sid["SID_DONE"])
+    elseif(data.status == "OpBusy" or data.status == "OpFailed")then
+      animationManager.stop(private.enrollmentAnimId)
+      private.showModal(sid["SID_Replace_Failed_Device"],sid["SID_Replace_Failed_And_Try_Again"],sid["SID_DONE"])
+    end
+  elseif(data.operation == "AbortOp")then
+    private.hideModal()
+    table["ZwaveAddDelModal.Group.leftButton.text"] = sid["SID_DONE"]
+    table["ZwaveAddDelModal.Group.rightButton.text"] = sid["SID_EXCLUDE_ANOTHER"]
+    gre.set_data(table)
+    zwaveDeviceManager.isRemoveAllFailedClick = false;
+  end
+  
+end
+
+function onZWaveThermostatUpButtonPressed(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.buttonImages = res["RES_THERMO_ARROWS_UP"]
+  d.releaseFunc = function()
+    local cell = private.tableView.pathToObj[mapargs.context_group]
+    private.adjustSetpointTemperature(cell,"up")
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+function onZWaveThermostatDownButtonPressed(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.buttonImages = res["RES_THERMO_ARROWS_DOWN"]
+  d.releaseFunc = function()
+    local cell = private.tableView.pathToObj[mapargs.context_group]
+    private.adjustSetpointTemperature(cell,"down")
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+function private.adjustSetpointTemperature(cell,operation)
+  local obj = private.table[cell.id]
+  local data = {}
+  local pressUpTime = os.time
+  
+  
+  if private.thermostatTimerID~=nil then
+    gre.timer_clear_timeout(private.thermostatTimerID)
+    private.thermostatTimerID = nil
+  end
+   
+  local setpointVal = tonumber(gre.get_value(cell.path ..".SetpointTemp.text"))
+  local text = gre.get_value(cell.path .. ".Subtext.text")
+  local mode = nil
+  local modeList = {["Auto"] = sid["SID_AUTO"],
+      ["Heat"] = sid["SID_HEAT"],
+      ["AuxHeat"] = sid["SID_EMERGENCY_HEAT"],
+      ["Cool"] = sid["SID_COOL"],
+      ["EcoHeat"] = sid["SID_ENERGY_SAVE_HEAT"],
+      ["EcoCool"] = sid["SID_ENERGY_SAVE_COOL"],
+      ["Off"] = sid["SID_OFF"],
+      ["Unknown"] = sid["SID_UNKNOWN"]}
+    
+    if(text ~= nil) then
+      for key,val in pairs(modeList) do
+        if(val == text) then
+          mode = key
+          break
+        end
+      end
+      --mode = modeList[text]
+    end
+    
+    
+  local min = obj["_stateObj"]["Setpoint"][mode]["RNG"][1]
+  local max = obj["_stateObj"]["Setpoint"][mode]["RNG"][2]
+  local units = obj["_stateObj"]["ThermoMeter"]["@temp"]["Unit"]
+  if(operation == sid["SID_Up"] and setpointVal < max) then
+    setpointVal = units=="C" and (setpointVal+private.setPointC) or (setpointVal+private.setPointF)
+  elseif(operation == string.lower(sid["SID_DOWN"]) and setpointVal > min) then 
+    setpointVal = units=="C" and (setpointVal-private.setPointC) or (setpointVal-private.setPointF)
+  end
+  data[cell.path ..".SetpointTemp.text"] = setpointVal
+  --data[cell.path ..".SetpointTemp.temp"] = setpointVal
+  local callback = function ()
+    local modeIndex = obj["_stateObj"]["Mode"]["@enum"]["Val"]
+    local modeName = nil
+    for key,val in pairs(obj["_stateObj"]["Mode"]["@enum"]["ENUM"]) do
+      if val == modeIndex then
+        modeName = key
+        break
+      end
+    end
+    --local units = obj["_stateObj"]["ThermoMeter"]["@temp"]["Unit"]
+    zwaveCommands.changeThermostatSetpoint(obj,modeName,setpointVal,units)
+    
+  end
+  gre.set_data(data)
+  private.thermostatTimerID = gre.timer_set_timeout(callback ,200)
+ 
+end
+
+function onReceivedZWaveControllerResetEvent(mapargs)
+  private.table = {}
+  print("ZWaveListScreen - onReceivedZWaveControllerResetEvent")
+end
+
+function onReceivedZWaveLocalInclusionRequest(mapargs)
+  private.isLocalInclusion = true
+end
+
+
+function private.setWarningText(level,message)
+  print("setWarningText--"..level)
+  local warningMap = {
+  [1]=sid["SID_UP_TO_SHARED_ZWAV_DEVICE"],
+  [2]=sid["SID_UP_TO_ZWAV_CONTROLLER"],
+  [3]=sid["SID_UP_TO_ZWAVE_LOCK"],
+  [4]=sid["SID_UP_TO_ZWAVE_THERMOSTATE"],
+  [5]=sid["SID_UP_TO_ZWAVE_GARAGE"],
+  [6]=sid["SID_UP_TO_ZWAVE_UNKNOWN_DEVICE"],
+  [34]=sid["SID_OPERATION_TIME_OUT"],
+  [35]=sid["SID_INCLUDED_INCOMPLETE_ERROR"]
+  }
+  local msg = nil 
+  if(level ~=nil)then
+   msg = warningMap[level]
+  else
+    msg = sid["SID_ADD_NODE_FAILS_WITH_UNKOWN_REASON"]
+  end
+  local d = {}
+  d["ZwaveAddDelModal.Group.warning.text"] = msg
+  d["ZwaveAddDelModal.Group.warning.grd_hidden"] = 0
+  d["ZwaveAddDelModal.Group.devices.grd_hidden"] = 1
+  d["ZwaveAddDelModal.Group.spinner.grd_hidden"] = 1
+  gre.set_data(d)
+
+end
+
+
+--- @param gre#context mapargs
+function RemoveFailedNode(mapargs) 
+  --Simon Use touch manager example from other buttons
+--TODO: Your code goes here...
+  --[[
+  local cell = private.tableView.pathToObj[mapargs.context_group]
+  local obj = private.table[cell.id]
+  if(obj:getStatus() == "Down")then
+    zwaveCommands.removeFailedNode(obj)
+  else
+  end
+  ]]
+end
+
+
+--- @param gre#context mapargs
+function ReplaceFailedNode(mapargs) 
+  --Simon Use touch manager example from other buttons
+--TODO: Your code goes here...
+  --[[
+  local cell = private.tableView.pathToObj[mapargs.context_group]
+  local obj = private.table[cell.id]
+  if(obj:getStatus() == "Down")then
+    zwaveCommands.replaceFailedNode(obj)
+  else
+  end
+  ]]
+end
+
+ 
+--- @param gre#context mapargs
+function onClickFix(mapargs) 
+--TODO: Your code goes here...
+  local cell = private.tableView.pathToObj[mapargs.context_group]
+  fixobj = private.table[cell.id]
+  if(fixobj:getCCSupport()==1 and fixobj:getStatus()~=sid["SID_DOWN"]) then
+    local body = "ID:"..fixobj.id
+              .."\n".. sid["SID_SECURITY_LEVEL"]  .. private.getSecLevel(fixobj._SecurityLevel)
+              .."\n".. sid["SID_DEVICE_TYPE"] .. ": " ..fixobj._Type
+              .."\n".. sid["SID_NODE_ID"] ..fixobj._NodeID 
+              .."\n".. sid["SID_VENDOR_NAME"] ..fixobj._VendorName
+                
+    private.showModal(sid["SID_ZWAVE_FIX"],sid["SID_SYSTEM_TROUBLE_SUPPORT_1"] .. " " .. fixobj:getName() ..".\n ".. sid["SID_EXCLUDE_AND_PAIR_AGAIN"],sid["SID_DONE"])
+    local data = {}
+    data["ZwaveAddDelModal.Group.deviceinfo.grd_hidden"] = 0
+    data["ZwaveAddDelModal.Group.deviceinfo.text"] = body
+    data["ZwaveAddDelModal.Group.leftButton.grd_hidden"] = 1
+    data["ZwaveAddDelModal.Group.rightButton.grd_hidden"] = 1
+    data["ZwaveAddDelModal.Group.exit.grd_hidden"] = 0
+    data["ZwaveAddDelModal.Group.devices.text"] = ""
+     data["ZwaveAddDelModal.Group.button.grd_hidden"] = 0
+    gre.set_data(data)
+  else
+    private.showModal(sid["SID_ZWAVE_FIX"],sid["SID_ZWAVE_FIX_MESSAGE"],sid["SID_REPLACE"])
+    local data = {}
+    data["ZwaveAddDelModal.Group.deviceinfo.grd_hidden"] = 1
+    data["ZwaveAddDelModal.Group.button.grd_hidden"] = 1
+    data["ZwaveAddDelModal.Group.leftButton.text"] = sid["SID_REPLACE"]
+    data["ZwaveAddDelModal.Group.leftButton.grd_hidden"] = 0
+    data["ZwaveAddDelModal.Group.rightButton.text"] = sid["SID_REMOVE"]
+    data["ZwaveAddDelModal.Group.rightButton.grd_hidden"] = 0
+    data["ZwaveAddDelModal.Group.exit.grd_hidden"] = 0
+    data["ZwaveAddDelModal.Group.devices.text"] = ""
+    gre.set_data(data)
+  end
+  
+end
+
+
+--- @param gre#context mapargs
+function onClickExit(mapargs) 
+--TODO: Your code goes here...
+  local data = {}
+  local table = {}
+  data.releaseFunc = function(...)
+    zwaveCommands.abortOperation()
+    private.hideModal()
+  end
+  touchManager.setUpTouchEvent(data)
+  table["ZwaveAddDelModal.Group.leftButton.text"] = sid["SID_DONE"]
+  table["ZwaveAddDelModal.Group.rightButton.text"] = sid["SID_EXCLUDE_ANOTHER"]
+  gre.set_data(table)
+  onInitZwaveManagementScreen()
+end
+function ZwaveListScreen_ClearZwaveCache()
+  private.table = {}
+end
+return public

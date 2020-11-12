@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<eventdefinitions>
+  <event name="timer.trend" type="0x8">
+    <label>timer.trend timer fired</label>
+    <description>The timer named timer.trend has fired</description>
+  </event>
+</eventdefinitions>

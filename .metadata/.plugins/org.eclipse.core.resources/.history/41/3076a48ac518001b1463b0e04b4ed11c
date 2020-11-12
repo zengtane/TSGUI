@@ -1,0 +1,116 @@
+local touchManager = require("TouchManager")
+local screenManager = require("ScreenManager")
+local class = {}
+local private = {}
+local public = {}
+class.__index = public
+private.pathToObj = {}
+function OnQSSliderPressed(args)
+  local data = {}
+  data.context =  args
+  local obj = private.pathToObj[args.context_control]
+  if(obj == nil)then
+    return
+  end
+  if(obj.pressFunc ~= nil)then
+    obj.pressed = true
+    obj.pressFunc(obj)
+  end
+  
+  data.moveFunc = function(...)
+    private.calcSliderPosition(args.context_control,obj)
+    if(obj.moveFunc ~= nil)then
+      obj.moveFunc(obj)
+    end
+  end
+  data.releaseMovedFunc = function(...)
+    obj.pressed = false
+    if(obj.releaseFunc ~= nil)then
+      obj.releaseFunc(obj)
+    end
+  end
+  data.releaseFunc = data.releaseMovedFunc
+  touchManager.setUpTouchEvent(data)
+end
+
+function newQSSliderControl(val, cont,vars,hori,off,sR,vR,s,pFunc,rFunc,mFunc)
+  --slider Range is going to change the value of variables you set in the render extension
+  --TODO: IMPLEMENT snapping
+  local instance = {
+    control = cont,
+    variables = vars,
+    sliderRange = sR,
+    isHorizontal = hori,
+    offset = off,
+    valueRange = vR,
+    snap = s,
+    pressFunc = pFunc,
+    releaseFunc = rFunc,
+    moveFunc = mFunc,
+    count = 0
+  } --create memory in heap and instance is pointing to it
+  setmetatable(instance, class)
+  instance:setValue(val,true)       
+  private.pathToObj[cont] = instance
+  return instance
+end
+
+function public:getValue()
+  return self.value
+end
+
+function public:getPercentage()
+  local deltaRange = self.valueRange[2] - self.valueRange[1]
+  return math.floor((self.value - self.valueRange[1]) * 100 / deltaRange)
+end
+
+function public:setValue(val, ignorePressed)
+  if(self.pressed == true and ignorePressed == nil)then
+    return
+  end
+  val = tonumber(val)
+  if (val < self.valueRange[1]) then
+    val = self.valueRange[1]
+  elseif val > self.valueRange[2] then
+    val = self.valueRange[2]
+  end
+  self.value = math.floor(val)
+  local pos = private.valueToPosition(self,self.value)
+  private.setSliderPos(self,pos)
+end
+function private.positionToValue(ref, pos)
+  
+  local percent = (pos - ref.sliderRange[1]) / (ref.sliderRange[2] - ref.sliderRange[1])
+  local deltaRange = ref.valueRange[2] - ref.valueRange[1]
+  return ref.valueRange[1] + (percent * deltaRange)
+end
+function private.valueToPosition(ref,val)
+  local percent = (val - ref.valueRange[1]) / (ref.valueRange[2] - ref.valueRange[1])
+  local deltaPos = ref.sliderRange[2] - ref.sliderRange[1]
+  return ref.sliderRange[1] + (percent *deltaPos) 
+end
+function private.setSliderPos(ref,pos)
+  
+  local data = {}
+  for i, var in pairs(ref.variables)do
+    data[ref.control.."." .. var] = pos + ref.offset
+  end
+  gre.set_data(data)
+end
+
+function private.calcSliderPosition(control,ref)
+
+  local curPos = ref.isHorizontal == true and touchManager.currentX or touchManager.currentY
+  local offsetTable = gre.get_control_attrs(control, "x","y")
+  local offset = ref.isHorizontal == true and offsetTable.x or offsetTable.y
+  local adjustedPos = curPos - offset
+  --
+  if (adjustedPos < ref.sliderRange[1]) then
+    adjustedPos = ref.sliderRange[1]
+  elseif adjustedPos > ref.sliderRange[2] then
+    adjustedPos = ref.sliderRange[2]
+  end
+  --
+  ref:setValue(private.positionToValue(ref,adjustedPos),true)
+  private.setSliderPos(ref,adjustedPos)
+end

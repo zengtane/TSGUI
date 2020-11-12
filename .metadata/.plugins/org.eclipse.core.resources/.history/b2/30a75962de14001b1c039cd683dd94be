@@ -1,0 +1,468 @@
+local touchManager = require("TouchManager")
+local screenManager = require("ScreenManager")
+local bleManager = require("BLEManager")
+local kpgsm = require("KeypadGeneralSettingsManager")
+local dropdown = require("DropdownList")
+local securityCommands = require("SecurityCommands")
+local userManager = require("UserManager")
+local animationManager = require("AnimationManager")
+local private = {}
+private.userObj = nil
+
+private.showAnim = nil
+private.spinnerAnim = nil
+private.hideAnim = nil
+
+private.deviceList = nil
+private.copiedDeviceObj = {}
+private.isPartitionMaster = false
+
+--
+function initBluetoothScreen()
+  if(__viewModelProgramming == true) then    
+    gre.set_layer_attrs("BluetoothScreen.PanicButton",{hidden=1})
+    gre.set_layer_attrs("BluetoothScreen.BottomBar",{hidden=1})
+  else
+    gre.set_layer_attrs("BluetoothScreen.PanicButton",{hidden=0})
+    gre.set_layer_attrs("BluetoothScreen.BottomBar",{hidden=0})
+  end
+  if(screenManager.data.user.id~=nil) then
+    private.userObj = screenManager.data.user
+    private.isPartitionMaster = screenManager.data.isPartitionMaster
+  else
+    private.userObj = userManager.data.user
+    private.isPartitionMaster = userManager.data.isPartitionMaster
+  end
+  local d = {}
+  d['BluetoothTitle.Title.text'] = sid["SID_BLUETOOTH_DISARM_WITH"]
+  d['BluetoothTitle.Title.subtext'] = sid["SID_BLUETOOTH_DISARM_WHEN_PAIRED"]
+  d['BluetoothTitleBar.Title.text'] = sid["SID_BLUETOOTH_DISARM"]
+  -- template for section header - Available Devices 
+  d['BluetoothContent.TemplateHeader.text'] = sid["SID_PAIRED_DEVICES"]
+  d['BluetoothContent.TemplateHeader.subtext'] = sid["SID_PAIRED_DEVICES_DESCRIPTION"]
+  -- template for section header - Paired Devices 
+  -- d['BluetoothContent.TemplateHeader.text'] = sid["SID_BLUETOOTH_PAIRED_DEVICES"]
+  -- d['BluetoothContent.TemplateHeader.subtext'] = sid["SID_BLUETOOTH_PAIRED_DEVICES_DECRIPTION"]
+  --d['BluetoothContent.TemplateItem.TextName.text'] = "Dummy Devices"
+  -- PAIR
+  d['BluetoothTitleBar.TextPair.text'] = sid["SID_BLUETOOTH_PAIR"]
+  d["BluetoothContent.TemplateItem.grd_hidden"] = 1
+  d["BlueToothModal.Content.UnPairDoneButton.text"] = sid["SID_DONE"]
+  --ALARM OCCURING
+
+  d["BluetoothScreen.BlueToothModal.grd_hidden"] = 1
+  d["BluetoothScreen.BlueToothModal.grd_y"] = -600
+  gre.set_data(d)
+  
+  
+  
+  private.constructPairDevices()
+end
+--
+--
+function onPressBluetoothDisarmToggle(mapargs)
+  local d = {}
+  d.context = mapargs
+  local state = 0
+  local deviceIndex = nil
+  for _,value in pairs(private.copiedDeviceObj) do
+    if value[mapargs.context_group] ~=nil then
+      deviceIndex = value[mapargs.context_group]
+      break
+    end
+  end
+  
+  if bleManager.getPairedDviceByIndex(deviceIndex) ~=nil then
+    state = bleManager.getPairedDviceByIndex(deviceIndex).Enable
+  else
+    print("bleManager.getPairedDviceByIndex---return exception nil")
+  end
+  d.buttonImages = res[ state == 0 and "RES_TOGGLE_ON" or "RES_TOGGLE_OFF"]  
+  d.releaseFunc = function()
+    if state == 1 then
+      bleManager.disableDevice(deviceIndex)
+    else
+      bleManager.enableDevice(deviceIndex)
+    end
+  end
+  touchManager.setUpTouchEvent(d)
+end
+--
+--
+function OnScreenHidePre_BluetoothScreen(args)
+  print("OnScreenHidePre_BluetoothScreen")
+  private.hideModal()
+  bleManager.enrollMode(0)
+  animationManager.stopAll();
+  private.showAnim = nil
+  private.hideAnim = nil
+  private.spinnerAnim = nil
+end
+function onPressBluetoothPair(args) 
+  local data = {}
+  data.context = args
+  data.releaseFunc = function()
+    if #private.deviceList == 1 then
+      --devicePopup.Create(sid["SID_BLE_PAIRED_PHONE_LIMIT"])
+      private.showModal(true)
+      return
+    end
+    bleManager.enrollMode(1)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function onBluetoothPairingButtonClosed()
+  private.hideModal()
+  bleManager.enrollMode(0)
+end
+
+function private.showModalAnmi()
+  if( private.showAnim == nil) then
+    local steps = 
+      {
+        {
+          rate = "easeout",
+          from = 0,
+          to = 70,
+          duration = 1000,
+          key = "Mask.Mask.alpha"
+        },
+        {
+          rate = "easeout",
+          from = 1,
+          to = 0,
+          duration = 0,
+          key = "BluetoothScreen.Mask.grd_hidden"
+        },--show
+        {
+          rate = "easeout",
+          from = -600,
+          to = 0,
+          duration = 1000,
+          key = "BluetoothScreen.BlueToothModal.grd_y"
+        },
+        
+      }
+    private.showAnim = animationManager.create(steps)
+  end
+  animationManager.play(private.showAnim)
+end
+
+function private.showModal(limit)
+  if limit ~= true then
+    private.animateModalSpinner()
+  end
+  
+  local d = {}
+  d[screenManager.getCurrentScreen() .. ".BlueToothModal.grd_hidden"] = 0
+  d["BlueToothModal.Content.DeviceName.text"] = limit == true and sid["SID_BLE_PAIRED_PHONE_LIMIT"] or ""
+  d["BlueToothModal.Content.PairCode.text"] = ""
+  d["BlueToothModal.Content.PairButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.RejectButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.UnPairDoneButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.Title.text"] = limit == true and "" or sid["SID_BLUETOOTH_PAIRING_WAITING"]
+  gre.set_data(d)
+  private.showModalAnmi()
+end
+
+function private.hideModal()
+  if( private.hideAnim == nil) then
+    local steps = 
+      {
+        {
+          rate = "easeinout",
+          to = 0,
+          duration = 1000,
+          key = "Mask.Mask.alpha"
+        },
+        {
+          rate = "easeinout",
+          to = 1,
+          duration = 1000,
+          key = "BluetoothScreen.Mask.grd_hidden"
+        },--show
+        {
+          rate = "easeinout",
+          to = 1,
+          duration = 1,
+          key = "BluetoothScreen.BlueToothModal.grd_hidden"
+        },
+        {
+          rate = "easeinout",
+          to = -600,
+          duration = 1000,
+          key = "BluetoothScreen.BlueToothModal.grd_y"
+        },
+      }
+    private.hideAnim = animationManager.create(steps)
+  end
+  animationManager.stop(private.spinnerAnim);
+  animationManager.play(private.hideAnim)
+end
+
+
+
+function onReceivedBLEMode_BluetoothScreen(mapargs)
+  local mode = json.decode(mapargs.context_event_data.mode)
+  if mode == "Enroll" then
+    private.showModal()
+  else
+    private.hideModal()
+  end
+end
+
+function onReceivedNewBluetoothDeviceInfo(mapargs)
+  local device = json.decode(mapargs.context_event_data.device)
+  local pin = device.PinCode
+  local name = device._Name
+  local d = {}
+  d["BlueToothModal.DeviceName.Title.text"] = name
+  d["BlueToothModal.Content.PairCode.text"] = sid["SID_PASSKEY"] .. ": " .. pin
+  d["BlueToothModal.Content.PairButton.grd_hidden"] = 0
+  d["BlueToothModal.Content.RejectButton.grd_hidden"] = 0
+  d["BlueToothModal.Content.UnPairDoneButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.PairButton.text"]  = sid["SID_PAIR"]
+  d["BlueToothModal.Content.RejectButton.RejectButton.text"] = sid["SID_REJECT"]
+  gre.set_data(d)
+end
+
+
+function private.animateModalSpinner()
+  local table = {}
+  table["BlueToothModal.Content.spinner.grd_hidden"] = 0
+  gre.set_data(table)
+  if(private.spinnerAnim == nil)then
+    local steps =
+    {
+      {
+        from = 0,
+        to = 359,
+        key = "BlueToothModal.Content.spinner.angle",
+        duration = 1000
+      }
+    }
+    private.spinnerAnim = animationManager.createLoop(steps)
+  end
+  animationManager.play(private.spinnerAnim)
+end
+
+
+
+function onPairButtonPressed_BluetoothModal(mapargs)
+  -- todo : button down state is missing
+  local data = {}
+  data.context = mapargs
+  data.releaseFunc = function()
+    bleManager.confirmNewDevice(1)
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function onRejectButtonPressed_BluetoothModal(mapargs)
+  -- todo : button down state is missing
+  local data = {}
+  data.context = mapargs
+  data.releaseFunc = function()
+    bleManager.confirmNewDevice(0)
+    onBluetoothPairingButtonClosed()
+  end
+  touchManager.setUpTouchEvent(data)
+end
+
+function onReceivedPairingStatus_BluetoothScreen(mapargs)
+  local status = json.decode(mapargs.context_event_data.status)
+  -- todo display pairing results
+  --onBluetoothPairingButtonClosed()
+end
+
+function onReceivedNewDeviceAdded_BluetoothScreen(mapargs)
+  print("------------onReceivedNewDeviceAdded_BluetoothScreen")
+  local id = json.decode(mapargs.context_event_data.id)
+  print("id"..id)
+  -- local uri = "@/BLE/Device_/" .. id .. "/_State 5=connected/p/State=ArmAway/p/_SubState/EntryTimer>0||{\"Tm\":30,\"ev32\":\"connected\"}/p/State=ArmAway/p/_SubState/ExitTimer=0"
+  local assignToPart = kpgsm.getHomePartition()
+  
+  if(not userManager.isPartitionDisarmableForUser(private.userObj,assignToPart))then
+    assignToPart = userManager.getFirstDisarmablePartitionForUser(private.userObj)
+  end
+  
+  bleManager.linkBluetoothUri(private.userObj.id,assignToPart,id)
+  -- workaround a race condition where UI zone shaddow doesn't get updated after linking BLE device with a zone.
+  -- there is a delay to update the BLE zone with the user and the uri
+  
+  local d = {}
+  d["BlueToothModal.Content.DeviceName.text"] = ""
+  d["BlueToothModal.Content.Title.text"] = sid["SID_PAIR_SUCCESSFUL"]
+  gre.set_data(d)
+  
+  gre.timer_set_timeout(private.constructPairDevices,2*1000)
+end
+
+function onReceivedDeviceDeleted_BluetoothScreen(mapargs)
+ if mapargs.context_event_data.UnPairByPress==1 then
+    private.showUnpairModal()
+ end
+ private.constructPairDevices()
+end
+
+function onReceiveDeviceStatusChange_BluetoothScreen(mapargs)
+  private.constructPairDevices()
+end
+
+
+function private.constructPairDevices()
+  print("BluetoothScreen - constructPairDevices")
+  private.deviceList = bleManager.getDeviceListByUserID(private.userObj.id)
+  print("deviceList".. json.encode(private.deviceList))
+  local _y = 200
+  local d = {}
+  for index,value in pairs(private.copiedDeviceObj) do
+    gre.delete_object(private.copiedDeviceObj[index].path)
+  end
+  private.copiedDeviceObj = {}
+  for i,device in pairs (private.deviceList) do
+    -- create a new group from "Template"
+    local sectionID = "Section_" .. device.id
+    gre.clone_object("BluetoothContent.TemplateItem", sectionID , "BluetoothContent", { y = _y, hidden = 0 })
+    d["BluetoothContent." .. sectionID .. ".Name.text"] = device._Name ~=nil 
+      and device._Name or sid["SID_UNKNOWN_DEVICE"]
+    d["BluetoothContent." .. sectionID .. ".Address.text"] = device._Addr ~=nil 
+      and device._Addr or sid["SID_UNKNOWN"]
+    d["BluetoothContent." .. sectionID .. ".Status.text"] = ""
+      --device._State == "connected" 
+      --and sid["SID_CONNECTED"] or sid["SID_DISCONNECTED"]
+    d["BluetoothContent." .. sectionID .. ".ToggleEnable.text"] = sid["SID_ENABLE"]
+    local part =  bleManager.getDevicePartition(device.id)
+    print("----------------partition: "..part)
+    
+    
+    local partObj = PartitionManager.partitions[part]
+    local name = partObj.Name
+    if(name == "")then
+      name = sid["SID_PARTITION"] .. " " .. part
+    end
+    d["BluetoothContent." .. sectionID .. ".Dropdown.text"] = name
+    
+    d["BluetoothContent." .. sectionID .. ".TextUnpair.text"] = sid["SID_UNPAIR_UPPER"]   
+    d["BluetoothContent." .. sectionID .. ".Toggle.image"] = device.Enable == 1 and res["RES_TOGGLE_ON"].up or res["RES_TOGGLE_OFF"].up
+    if( true )then
+      --due to time constraint feature is not finished, we have disabled it
+      d["BluetoothContent." .. sectionID .. ".ToggleEnable.grd_hidden"] = 1
+      d["BluetoothContent." .. sectionID .. ".Toggle.grd_hidden"] = 1
+    end
+    _y = _y + 100 
+    table.insert(private.copiedDeviceObj,{["BluetoothContent." .. sectionID] = device.id,["path"] = "BluetoothContent." .. sectionID} )
+  end
+  gre.set_data(d)
+end
+
+function private.showUnpairModal()
+
+  local d = {}
+  d[screenManager.getCurrentScreen() .. ".BlueToothModal.grd_hidden"] = 0
+  d["BlueToothModal.Content.DeviceName.text"] = sid["SID_UNPAIR_DETAILS"]
+  d["BlueToothModal.Content.PairCode.text"] = ""
+  d["BlueToothModal.Content.PairButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.RejectButton.grd_hidden"] = 1
+  d["BlueToothModal.Content.Title.text"] = sid["SID_UNPAIR_SUCCESSFUL"]
+  d["BlueToothModal.Content.UnPairDoneButton.grd_hidden"] = 0
+  d["BlueToothModal.Content.spinner.grd_hidden"] = 1
+  gre.set_data(d)
+  private.showModalAnmi()
+end
+function onUnpairBluetoothDevicePressed(mapargs)
+  local index = nil
+  for _,value in pairs(private.copiedDeviceObj) do
+    if value[mapargs.context_group] ~=nil then
+      index = value[mapargs.context_group]
+      break
+    end
+  end  
+ 
+  if index ~=nil then
+    local zoneNumberList = bleManager.getDeviceZoneNumberList(index)
+    for _,zoneNumber in pairs(zoneNumberList) do
+      local msg = {}
+      msg["uri"] = ""
+      msg["User"] = 0
+      --show confirm modal
+      
+      bleManager.unpairDevice(index)
+      mqtt_client.publish("@/SET/Panel/Zone_/"..zoneNumber,json.encode(msg))
+      mqtt_client.publish("@/GET/Panel/Zone_/"..zoneNumber,"")
+    end   
+  end  
+end
+
+
+function OnDropdownPhonePartition_BluetoothScreen(args)
+  print("OnDropdownPhonePartition_BluetoothScreen")
+ 
+  local deviceID = nil
+  for _,value in pairs(private.copiedDeviceObj) do
+    if value[args.context_group] ~=nil then
+      deviceID = value[args.context_group]
+      print("triggered by event: "..args.context_event)
+      print("event was targeting: "..args[args.context_target])
+      break
+    end
+  end    
+  if deviceID ==nil then
+     print("Wrong selected phone error")
+     return
+  else
+     print("device id is :"..deviceID)
+  end    
+  local d = {}
+  d.context = args
+  d.buttonImages = res["RES_ARROW_DOWN"]
+  d.releaseFunc = function()
+    print("Button Release Func-----------------")
+    local options = {}
+    local optionsInText = {}
+    --local zoneNumberList = bleManager.getDeviceZoneNumberList(index)
+    local setPart = bleManager.getDevicePartition(deviceID)
+    print("setPart: "..setPart)
+    local partitions = kpgsm.getActiveNormalPartitions()
+    for i = 1, #partitions do
+        local partId = partitions[i]
+        local user = private.userObj
+        if((private.isPartitionMaster and kpgsm.getHomePartition() == i) or (not private.isPartitionMaster)) and userManager.isPartitionDisarmableForUser(user,partId)then
+        	  print("partitions: " .. partitions[i])
+            table.insert(options,partId)
+            local partObj = PartitionManager.partitions[partId]
+            
+            local name = partObj.Name
+            if(name == "")then
+              name = sid["SID_PARTITION"] .. " " .. partId
+            end
+            
+            table.insert(optionsInText,name)
+        end
+    end
+    
+    local ddsFunc = function(luaIndex)
+	     print("selected index:"..luaIndex)
+       local zoneNumberList = bleManager.getDeviceZoneNumberList(deviceID)
+       for _,zoneNumber in pairs(zoneNumberList) do
+         local msg = {}
+         print("Set to part:"..options[luaIndex])
+         setPart = options[luaIndex]
+         msg["Part"] = options[luaIndex]
+         securityCommands.setValuesToZones(msg,{["id"] = zoneNumber})
+         local d = {}
+        
+         local sectionID = "Section_" .. deviceID
+         d["BluetoothContent." .. sectionID .. ".Dropdown.text"] = optionsInText[luaIndex]
+         gre.set_data(d)
+         --gre.timer_set_timeout(private.constructPairDevices,500)
+
+       end   
+    end
+    print("----------setPart to : "..setPart)
+    dropdown.show(470,300,320,400, optionsInText, setPart, ddsFunc)
+  end
+  touchManager.setUpTouchEvent(d)
+end
+

@@ -1,0 +1,10 @@
+
+POWER_ON
+
+gre.animate.complete.power_on##power_on animation complete #The animation named power_on has completed
+
+POWER_OFF
+
+gre.animate.complete.power_off##power_off animation complete #The animation named power_off has completed
+
+START_PLAYING

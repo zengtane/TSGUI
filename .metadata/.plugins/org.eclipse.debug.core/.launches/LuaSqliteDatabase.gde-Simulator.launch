@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.crank.gdt.simulator.launching.GRELaunch">
+<stringAttribute key="gre.gde.file" value="LuaSqliteDatabase.gde"/>
+<stringAttribute key="gre.location" value="C:\Program Files\Crank_Software\Storyboard_Engine\5.3.201807051156\win32-x86-opengles_2.0-obj"/>
+<stringAttribute key="gre.options" value="-v"/>
+<listAttribute key="gre.plugin.list">
+<listEntry value="libgre-plugin-animation.dll"/>
+<listEntry value="libgre-plugin-audio.dll"/>
+<listEntry value="libgre-plugin-canvas.dll"/>
+<listEntry value="libgre-plugin-capture-playback.dll"/>
+<listEntry value="libgre-plugin-circle.dll"/>
+<listEntry value="libgre-plugin-effects-3d.dll"/>
+<listEntry value="libgre-plugin-event-redirect.dll"/>
+<listEntry value="libgre-plugin-ffmpeg.dll"/>
+<listEntry value="libgre-plugin-gesture.dll"/>
+<listEntry value="libgre-plugin-greio.dll"/>
+<listEntry value="libgre-plugin-logger.dll"/>
+<listEntry value="libgre-plugin-lua.dll"/>
+<listEntry value="libgre-plugin-luagredom.dll"/>
+<listEntry value="libgre-plugin-media.dll"/>
+<listEntry value="libgre-plugin-model3d.dll"/>
+<listEntry value="libgre-plugin-poly.dll"/>
+<listEntry value="libgre-plugin-rext-external.dll"/>
+<listEntry value="libgre-plugin-rtext.dll"/>
+<listEntry value="libgre-plugin-sbp-reader.dll"/>
+<listEntry value="libgre-plugin-screen-3d.dll"/>
+<listEntry value="libgre-plugin-screen-dump.dll"/>
+<listEntry value="libgre-plugin-screen-path.dll"/>
+<listEntry value="libgre-plugin-screen-rotate.dll"/>
+<listEntry value="libgre-plugin-screen-scale.dll"/>
+<listEntry value="libgre-plugin-system.dll"/>
+<listEntry value="libgre-plugin-timer.dll"/>
+<listEntry value="librender-plugin-opengles_2.0.dll"/>
+</listAttribute>
+<stringAttribute key="gre.sb.project" value="LuaSqliteDatabase"/>
+</launchConfiguration>

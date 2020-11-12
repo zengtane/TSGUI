@@ -1,0 +1,134 @@
+--[[    COPYRIGHT 2018 HONEYWELL INTERNATIONAL   
+        Author : Eliran Noach E599130          ]]
+        
+local zwaveDevice = require("ZWaveDevice")
+local utils = require("Utils")  
+--local zwaveEvents = require ("ZWaveEvents")     
+local private = {}
+local public = {}
+
+private.deviceList = {}
+private.zwaveList = {}
+
+function public.updateZwaveDeviceList(message)
+  local zObj = message
+  local data = {}
+  for deviceNumber,deviceObj in pairs(zObj["Zwave"]["Device_"]) do
+    local id = deviceNumber
+    if(id ~= "*")then
+      local new = private.deviceList[id] == nil;
+      print("updateZwaveDeviceList***" .. tostring(new))
+      if new then
+        private.deviceList[id] = {}
+      end
+      
+      local change = private.setZWaveObjectByDeltas(deviceObj,private.deviceList[id])
+      local remove = private.deviceList[id]["*ACTION*"] == "Deleted"
+      local add = private.deviceList[id]["*ACTION*"] == "Added"
+      
+      
+      data["device"] = json.encode(private.deviceList[id])
+      if(deviceObj._Type == "Controller") then -- no need to display controller on ZwaveListScreen
+        gre.send_event_data("ZWaveReceiveControllerEvent","1s0 device",data)
+      end
+      
+      if  deviceObj["*ACTION*"] == nil then
+      
+        if(new )then
+          print("new*********")
+          gre.send_event_data("ZWaveNewDeviceEvent","1s0 device",data)
+          private.deviceList[id]["*ACTION*"] = nil;
+        elseif(change)then
+          if add then -- add an existed device, and its information has some changes.
+            print("change -add ")
+            gre.send_event_data("ZWaveNewDeviceEvent","1s0 device",data)
+            private.deviceList[id]["*ACTION*"] = nil;
+          end
+          print("change -change ")
+          gre.send_event_data("ZWaveDeviceStatusChangeEvent","1s0 device",data)
+        elseif( new ==false ) then -- add an existed device, and its information doesn't have change.
+          print("new ==false" )
+          gre.send_event_data("ZWaveNewDeviceEvent","1s0 device",data)
+          private.deviceList[id]["*ACTION*"] = nil;
+        end
+      elseif remove  then
+        gre.send_event_data("ZWaveDeleteDeviceEvent", "1s0 device", data)
+        private.deviceList[id] = nil 
+      end
+       
+    end
+      
+  end  
+end
+
+
+function private.setZWaveObjectByDeltas(obj, cache, parentKey)
+  local changeDetected = false
+  --obj={a:2,b:3} cache={a:1}
+  for key, value in pairs(obj) do
+      if(key ~= "$tag")then
+          if(type(value) ~= "table") then
+            
+              if(value == cache[key]) then
+                  obj[key] = nil
+              else
+                  cache[key] = value
+                  changeDetected = true
+              end
+          else
+              if(cache[key] == nil)then
+                  cache[key] = {}
+              end
+              local childChangeDetected = private.setZWaveObjectByDeltas(value,cache[key], key)
+              if(childChangeDetected == false)then
+                  obj[key] = nil
+              end
+              changeDetected = childChangeDetected or changeDetected
+              
+          end
+      else
+          obj[key] = nil
+    end
+  end
+  
+  --cache={a:2,b:3} obj={a:1}
+  for key, value in pairs(cache) do
+      if(key ~= "$tag")then
+          if(type(value) ~= "table") then
+            
+              if(value == obj[key]) then
+                  obj[key] = nil
+              else
+                  cache[key] = value
+                  changeDetected = true
+              end
+          else
+              if(obj[key] == nil) then
+                cache[key] = nil
+                changeDetected = true
+              end
+          end
+     
+    end
+  end
+  return changeDetected
+end
+
+function public.clearDeviceList()
+  private.deviceList = {}
+end
+
+function public.getDevicesCount()
+  if(#private.deviceList == 0) then
+    local count = 0
+    for _ in pairs(private.deviceList) do count = count + 1 end
+    return count - 1 -- less one, to remove controller count 
+  else
+    return #private.deviceList
+  end
+end
+
+return public        
+        
+        
+         

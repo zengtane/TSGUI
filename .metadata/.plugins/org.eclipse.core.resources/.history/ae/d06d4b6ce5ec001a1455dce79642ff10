@@ -1,0 +1,154 @@
+--[[    COPYRIGHT 2018 HONEYWELL INTERNATIONAL
+
+        Author : Eliran Noach E599130          ]] 
+
+local zwaveDeviceList = require("ZWaveDeviceList")
+local zwaveCommands = require("ZwaveCommands")
+
+local public = {}
+local private = {}
+
+private.zwaveObject = {}
+public.zwaveReady = 0
+
+
+function onMqttConnectedZWaveEventListener(args)
+  ZwaveListScreen_ClearZwaveCache()
+  zwaveDeviceList.clearDeviceList()
+  zwaveCommands.updateLocalController()
+  zwaveCommands.requestDeviceList()
+end
+
+
+function public.initZWaveEvents()
+  public.subscribeToZWaveEvents()  
+end
+
+
+function public.subscribeToZWaveEvents()
+  print("subscribeToZWaveEvents")
+  mqtt_client.subscribe(__GUIQUERYURI .. "/Zwave/Network/#",private.onReceivedZWaveNetworkListener);
+  mqtt_client.subscribe("@/Zwave/Network/#",private.onReceivedZWaveNetworkListener);
+  mqtt_client.subscribe(__GUIQUERYURI .. "/Zwave/Device_/#",private.onReceivedZWaveDeviceListListener);
+  mqtt_client.subscribe("@/Zwave/Device_/#",private.onReceivedZWaveDeviceListListener);
+  mqtt_client.subscribe("@/Zwave/FactoryReset/#",private.onZwaveFactoryReset);
+end
+
+function private.onZwaveFactoryReset(payload)
+  if payload.message == "Finished" then
+    gre.send_event("ZwaveFactoryResetFinished")
+  end
+
+end
+
+function private.onReceivedZWaveNetworkListener(msg)
+  local payload = msg.object
+  local hasChanged = private.setZWaveObjectByDeltas(payload,private.zwaveObject)
+  if hasChanged~=true then
+    print("onReceivedZWaveNetworkListener : No Real Change")
+    return
+  end
+  for key,value in pairs(payload["Zwave"]["Network"]) do
+    if key == "Mode" then
+      local modeObj = private.zwaveObject["Zwave"]["Network"]["Mode"]
+      local data = {}
+      data["operation"] = modeObj["operation"]
+      data["status"] = modeObj["Status"]
+      data["DskPin"] = modeObj["DskPin"]
+      data["CsaPin"] = modeObj["CsaPin"]
+      if(modeObj["OpFailReason"] ~= nil) then
+        data["OpFailReason"] = modeObj["OpFailReason"]
+      end
+      if modeObj["operation"] == "Reset" and modeObj["Status"] == "OpDone" then
+        zwaveDeviceList.clearDeviceList()
+        gre.send_event("ZWaveControllerResetEvent")
+      end
+
+      print("onReceivedZWaveNetworkListener : Sending ZWaveModeChange Event")
+      gre.send_event_data("ZWaveModeChange","1s0 operation 1s0 status 1s0 DskPin 1s0 CsaPin 1s1 OpFailReason",data)
+    elseif key =="NodeList" then
+      local failedNodesListObj = private.zwaveObject["Zwave"]["Network"]["FailedNodeList"]
+      gre.send_event_data("ZWaveFailedNodeListEvent","1s0 list",failedNodesListObj)
+      -- if new HOMEID is assigned then send the rest of this along
+    elseif key == "_HomeID" then
+      local data = {["HomeID"] = private.zwaveObject["_HomeID"],
+        ["ControllerID"] = private.zwaveObject["_ControllerID"],
+        ["ZIPVer"] = private.zwaveObject["_ZIPVer"],
+        ["ZWareVer"] = private.zwaveObject["_ZWareVer"],
+      }
+      public.HomeID = private.zwaveObject["Zwave"]["Network"]["_HomeID"]
+      public.ControllerID = private.zwaveObject["Zwave"]["Network"]["_ControllerID"]
+      public.ZIPVer = private.zwaveObject["Zwave"]["Network"]["_ZIPVer"]
+      public.ZWareVer = private.zwaveObject["Zwave"]["Network"]["_ZWareVer"]
+      public.ZwaveRole = private.zwaveObject["Zwave"]["Network"]["_ZwaveRole"]
+      gre.send_event_data("ZWaveNetworkInfoChangeEvent","1s0 HomeID 1s0 ControllerID 1s0 ZIPVer 1s0 ZWareVer",data)
+    elseif key == "Ready" then
+      local d = private.zwaveObject["Zwave"]["Network"]["Ready"]
+      if(d == 1)then
+        print("zwave ready")
+        public.zwaveReady = 1
+        local table_context = "BottomBar.Menu.RightTable1"
+        local data = {}
+        data[table_context .. ".color." .. "1" .. ".1"] = 0xFFFFFF
+        data[table_context .. ".rightTextColor." .. "1" .. ".1"] = 0x787878
+        data[table_context .. ".text." .. "1" .. ".1"] = "All Devices"
+        data[table_context .. ".text." .. "2" .. ".1"] = "Z-Wave Management"
+        gre.set_data(data)
+      else
+        print("zwave not ready")
+        public.zwaveReady = 0
+        local table_context = "BottomBar.Menu.RightTable1"
+        local data = {}
+        data[table_context .. ".color." .. "1" .. ".1"] = 0xFFFFFF
+        data[table_context .. ".rightTextColor." .. "1" .. ".1"] = 0x787878
+        data[table_context .. ".text." .. "1" .. ".1"] = "ZWave Not Ready"
+        data[table_context .. ".text." .. "2" .. ".1"] = "ZWave Not Ready"
+        gre.set_data(data)
+      end
+    end
+
+  end
+end
+
+
+function public.getNetworkInfo()
+
+end
+
+function private.onReceivedZWaveDeviceListListener(msg)
+  local str = json.encode(msg.message)
+  print("onReceivedZWaveDeviceListListener :" .. str)
+  zwaveDeviceList.updateZwaveDeviceList(msg.object)
+end
+
+
+function private.setZWaveObjectByDeltas(obj, cache, parentKey)
+  local changeDetected = false
+  for key, value in pairs(obj) do
+    if(key ~= "$tag" and key ~="Device_")then
+      if(type(value) ~= "table") then
+        if(value == cache[key]) then
+          obj[key] = nil
+        else
+          cache[key] = value
+          changeDetected = true
+        end
+      else
+        if(cache[key] == nil)then
+          cache[key] = {}
+        end
+        local childChangeDetected = private.setZWaveObjectByDeltas(value,cache[key], key)
+        if(childChangeDetected == false)then
+          obj[key] = nil
+        end
+        changeDetected = childChangeDetected or changeDetected
+
+      end
+    else
+      obj[key] = nil
+    end
+  end
+  return changeDetected
+end
+
+return public

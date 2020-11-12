@@ -1,0 +1,665 @@
+-- This file manages all socket connections.  It tries to connect them
+-- all at startup.  If it is unable to connect, or a connection fails,
+-- it will periodically try to reconnect.
+--
+-- Design decisions:
+-- Since Lua is not thread-safe, one of the goals was to write this
+-- with as few threads as possible.
+--
+-- Since crank does not cleanup threads when they exit (on Android),
+-- we create all threads at startup and don't spawn new threads while
+-- running.
+--
+-- Since crank timers fail when the system time is set, we create our
+-- own periodic timer.  Managing of the sockets is done on this
+-- timer which calls CBManageSockets.
+--
+-- Connect:
+-- We use a thread (connect_thread()) to connect each socket, since the
+-- connect call takes time, and we don't want to block the GUI.  We
+-- tell the thread to connect a new socket by setting the do_connect
+-- and connect_info variables.  This causes it to try to connect,
+-- placing the connected socket in newly_connected_socket.  It sends a
+-- SocketConnected event to CBSocketConnected telling it whether it
+-- succeded or failed.
+--
+-- Read:
+-- We create a thread (listen_for_data()) which waits for data to be
+-- received on any of the connected sockets.  When data is received it
+-- sends an event to CBSocketsReceiveData.  It does not read the data,
+-- that is done by CBSocketsReceiveData.  When a new socket is
+-- connected or closed, we send the new list of connected sockets to
+-- this thread by setting connected_sockets_changed and
+-- connected_sockets.  It reads these variables and updates its data
+-- accordingly.
+
+local myenv = gre.env({ "target_os", "target_cpu" })
+print("OS: " .. myenv.target_os .. " Arch: " .. myenv.target_cpu)
+package.cpath = package.cpath .. ";" .. gre.SCRIPT_ROOT .. "/" .. myenv.target_os .. "-" ..  myenv.target_cpu .."/luasocket/?.so;"
+package.cpath = package.cpath .. ";" .. gre.SCRIPT_ROOT .. "/" .. myenv.target_os .. "-" ..  myenv.target_cpu .."/lpeg/?.so;"
+package.path = gre.SCRIPT_ROOT .. "/luasocket/?.lua;"..package.path
+
+local socket = require "socket"
+local json_chunker = require "json_chunker"
+
+
+local sockets = {}  -- Holds all the sockets and associated data
+
+-- Holds the socket which has just been connected by the connect() thread.
+-- Accesed on multiple threads.
+local newly_connected_socket = nil
+-- Used to shutdown sockets when switching connection type ENT-->PSK
+local close_socket_connection = {
+  ["SecurityApp"] = false,
+  ["WifiApp"] = false,
+  ["ZWaveApp"] = false,
+  ["WifiApApp"] = false
+}
+
+-- These variables are used to communicate with connect_thread()
+local do_connect = false                      -- Set to true when we want to connect a socket
+local connect_info = {name='', ip='', port=0} -- Holds info used to connect a socket
+
+-- These varibles are used to communicate with the listen_for_data() thread
+local connected_sockets = {}            -- All the sockets which are currently connected
+local connected_sockets_changed = false -- Indicates that connected_sockets has changed
+
+
+local IP_ADDRESS = '127.0.0.1'
+if gre.env("target_os") == "android" then
+   IP_ADDRESS = '172.25.50.1'
+elseif gre.env("target_cpu") == "x86" then
+   --IP_ADDRESS = '192.168.86.39'
+   --IP_ADDRESS = '192.168.50.157'
+   --IP_ADDRESS = '192.168.50.145' -- Leo
+   --IP_ADDRESS = '192.168.86.43'
+   --IP_ADDRESS = '192.168.50.145'
+   --IP_ADDRESS = '192.168.1.240' 
+   IP_ADDRESS = '192.168.12.105' -- Tan'e ADT panel IP
+end
+
+-- The maximum amount of time (in seconds) we will wait before trying
+-- to reconnect a socket.  We perform exponential backoff until this
+-- value is hit.
+local MAX_CONNECT_DELAY = 10
+
+local PING_TIME = 5     -- Send a ping every PING_TIME seconds
+local PING_RETRIES = 3  -- Allow PING_RETRIES failures before we close socket.
+if gre.env("target_os") == "android" then
+   PING_RETRIES = 6
+end
+
+local securedConnectionPortOffset = 0
+
+local log_tag = '[socket3] '
+local function log(text)
+   print(log_tag .. text)
+end
+
+local function sock_select(socks, timeout)
+   local ok, socks_ready_to_read_or_err, z, err = pcall(socket.select, socks, nil, timeout)
+
+   data_available = false
+   if not ok then
+      log('sock_select failed: ' .. (socks_ready_to_read_or_err or '') .. '. timeout=' .. tostring(timeout))
+   elseif err == nil then
+      data_available = true
+   elseif err ~= 'timeout' then
+      log('sock_select failed:: ' .. err .. '. timeout=' .. tostring(timeout))
+   end
+
+   return data_available, socks_ready_to_read_or_err
+end
+
+local rx_data_pending = 0
+local function quit_if_dispatcher_is_stuck()
+  rx_data_pending = rx_data_pending + 1
+  if 40 < rx_data_pending then
+    --gre.quit() -- Cant use this because dispatcher is gone
+    os.exit(1)
+  end
+end
+
+local function check_for_rx_data(open_socks)
+   local data_available, _ = sock_select(open_socks, 2.1)
+   if data_available then
+      quit_if_dispatcher_is_stuck()
+      gre.send_event_data('SocketDataReceived', '', {})
+   end
+end
+
+-- This thread waits for data to be received on any of the sockets.
+-- When data has been received it sends a SocketDataReceived event,
+-- and goes back to waiting (it does not read the data itself).
+local run_listen_for_data_thread = true
+local function listen_for_data()
+   local open_socks = {}
+   --while true do
+   while run_listen_for_data_thread do
+      if connected_sockets_changed then
+         open_socks = {}
+         for i, v in ipairs(connected_sockets) do  -- Take a copy since GUI thread updates this
+            table.insert(open_socks, v)
+         end
+         connected_sockets_changed = false
+      end
+      check_for_rx_data(open_socks)
+      socket.sleep(0.05)  -- Give event loop thread some time to read what has been received
+   end
+   print("run_listen_for_data_thread shutting down!!!!")
+end
+
+-- This thread tries to connect a socket.
+-- It sends the SocketConnected event, saying whether the connection
+-- was succesfull or not.
+-- The new socket is stored in newly_connected_socket.
+local function connect(name, ip , port)
+   if (ip ~= "localhost") then
+      port = port + securedConnectionPortOffset
+   end
+
+   log('enter connect(' .. name .. ', ' .. ip .. ', ' .. tostring(port) .. ')')
+   local isok = 0
+   newly_connected_socket = nil
+   local sock = socket.tcp()
+   sock:settimeout(2)
+   local err
+   local success
+   success, err = sock:connect(ip, port)
+   if success then
+      sock:setoption("keepalive", true)
+      sock:settimeout(0)
+      newly_connected_socket = sock
+      isok = 1
+   end
+
+   local success, err = gre.send_event_data(
+      'SocketConnected', "4s1 ok 1s0 name", {ok=isok, name=name})
+   if(success == false) then
+      log("GRE send error: " .. err)
+   end
+end
+
+local run_connect_thread = true
+local function connect_thread()
+   --while true do
+   while run_connect_thread do
+      if do_connect then
+         do_connect = false
+         connect(connect_info.name, connect_info.ip, connect_info.port)
+      end
+      socket.sleep(1.1)
+   end
+   print("run_connect_thread shutting down!!!!")
+end
+
+local function get_open_socket_descriptors()
+   local connected_socks = {}
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connected' then
+         table.insert(connected_socks, sock.sock)
+      end
+   end
+   return connected_socks
+end
+
+local function update_list_of_listening_sockets()
+   -- If the thread has not yet read the data we set last time, wait
+   -- here until it does.  Should almost never block here.
+   while connected_sockets_changed do
+      socket.sleep(0.1)
+   end
+   connected_sockets = get_open_socket_descriptors()
+   connected_sockets_changed = true  -- Tell the thread to get the new sockets
+end
+
+local function close_sock(sock)
+   log('Closing ' .. sock.name)
+
+   sock.sock:shutdown("both")
+   sock.sock:close()
+   sock.state = 'closed'
+
+   update_list_of_listening_sockets()
+
+   gre.send_event_data(sock.name .. "Disconnected", '', {})
+end
+
+function close_socket(name)
+   local s = sockets[name]
+   if not s then
+      return false
+   end
+
+   close_sock(s)
+   return true
+end
+
+function reconnect_closed_sockets()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'closed' then
+         sock.state = 'ready_to_connect'
+      end
+   end
+end
+
+-- Return a string representation of 'o'
+local function str(o)
+   if type(o) == 'table' then
+      local s = '{ '
+      for k,v in pairs(o) do
+         if type(k) ~= 'number' then k = '"'..k..'"' end
+         s = s .. '['..k..'] = ' .. str(v) .. ','
+      end
+      return s .. '} '
+   else
+      return tostring(o)
+   end
+end
+
+local function print_socket_stats()
+   local str = ''
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connected' then
+         local r, s, a = sock.sock:getstats()
+         str = str .. log_tag .. name ..
+            ' received=' .. tostring(r) ..
+            ' sent=' .. tostring(s) ..
+            ' age=' .. tostring(a) .. ' ' ..
+            tostring(sock.sock) .. '\n'
+      end
+   end
+   log(str)
+end
+
+local function print_sockets()
+   local s = ''
+   for name, sock in pairs(sockets) do
+      s = s .. log_tag .. name .. ' = ' .. str(sock) .. '\n'
+   end
+   log(s)
+end
+
+function socket_connected( name )
+   print_sockets()
+   local s = sockets[name]
+   return s and (s.state == 'connected')
+end
+
+local function sendall(sock, msg)
+   for send_tries=0, 50 do  -- Try sending the message for up to 5 seconds
+      local bytes_sent, err, last_byte_index  = sock:send(msg)
+      if err == nil then
+         return nil  -- msg sent
+      elseif err ~= 'timeout' then
+         return err
+      end
+
+      msg = string.sub(msg, last_byte_index + 1)
+
+      socket.sleep(0.1)
+   end
+   return 'failed'
+end
+
+local function send_ping(sock)
+   local err = sendall(sock.sock, '{"MsgType": "Ping"}')
+   if err then
+      log('Failed to send ping')
+      close_sock(sock)
+   end
+end
+
+--local function send_ping(sock)
+--  local seq = getTargetSeq(sock)
+--  local data = "{\"MsgType\": \"Ping\", " .. "\"Seq\": " .. seq .. "}"  
+--   
+--   
+--  local err = sendall(sock.sock, '{"MsgType": "Ping"}')
+--  if err then
+--    log('Failed to send ping')
+--    close_sock(sock)
+--  end
+--end
+
+local function handle_ping(sock)
+   local p = sock.ping
+   if p.tx_countdown == 0 then
+      if p.ping_tries_remaining == 0 then
+         log('Did not receive ping response, closing sock')
+         close_sock(sock)
+      else
+         send_ping(sock)
+         p.ping_tries_remaining = p.ping_tries_remaining - 1
+         p.tx_countdown = PING_TIME - 1
+      end
+   else
+      p.tx_countdown = p.tx_countdown - 1
+   end
+end
+
+local function handle_pings()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connected' then
+        if close_socket_connection[sock.name] == false then
+          handle_ping(sock)
+        else
+          print("Closing socket for connection type change!!!")
+          close_socket_connection[sock.name] = false
+          close_sock(sock)
+        end
+      end
+   end
+end
+
+local function update_reconnect_times()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'closed' then
+         if sock.reconnect.countdown == 0 then
+            sock.state = 'ready_to_connect'
+         else
+            sock.reconnect.countdown = sock.reconnect.countdown - 1
+         end
+      end
+   end
+end
+
+local function connect_pending()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connect_pending' then
+         return true
+      end
+   end
+   return false
+end
+
+local function connect_ready_socket()
+   if connect_pending() == true then
+      log('!!! connect_ready_socket called while connections are pending.  This should never happen.')
+      return
+   end
+
+   for name, sock in pairs(sockets) do
+      if sock.state == 'ready_to_connect' then
+         sock.state = 'connect_pending'
+         connect_info.name = sock.name
+         connect_info.ip = sock.ip
+         connect_info.port = sock.port
+         do_connect = true
+         break
+      end
+   end
+end
+
+local function close_failed_sockets()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connect_failed' then
+         sock.state = 'closed'
+      end
+   end
+end
+
+local function new_socket(name, ip, port)
+   return {state='ready_to_connect',
+           name=name,
+           ip=ip,
+           port=port,
+           sock={},                -- The actual lua socket
+           ping={tx_countdown=0,          -- When this hits 0 we send a ping
+                 ping_tries_remaining=0}, -- The number of failed pings left before we close socket
+           reconnect={countdown=0, -- When this hits 0 we reconnect the socket
+                      delay=0},    -- The current delay before we reconnect
+           received_data=''}
+end
+
+
+
+
+local function init_sockets()
+   log('init_sockets()')
+   local connections = {
+      {'SecurityApp', IP_ADDRESS, 12350},      
+      {'ZWaveApp', IP_ADDRESS, 15000},
+      {'WifiApp', IP_ADDRESS, 15010},
+      --{'SecurityApp', IP_ADDRESS, 12351},
+      --{'WifiApp', IP_ADDRESS, 15011}
+   }
+     
+   if gre.env("target_os") == "android" then
+      table.insert(connections, {'WifiApApp', 'localhost', 15010})
+   end
+
+  
+   for i, sock in ipairs(connections) do
+      local name, ip, port = sock[1], sock[2], sock[3]
+      sockets[name] = new_socket(name, ip, port)
+   end
+   print_sockets()
+end
+
+function set_close_connection_state (state)
+  close_socket_connection["SecurityApp"] = state
+  close_socket_connection["WifiApp"] = state
+  close_socket_connection["ZWaveApp"] = state
+end
+  
+function SwitchtoSecureComm() 
+  set_close_connection_state(true)
+  securedConnectionPortOffset = 1
+  --init_sockets()
+end
+
+function reset_connnection_port_offset()
+  securedConnectionPortOffset = 0
+end
+
+local function get_socket(sock_descriptor)
+   for name, sock in pairs(sockets) do
+      if sock.sock == sock_descriptor then
+         return name, sock
+      end
+   end
+   return nil, nil
+end
+
+local function received_valid_msg(socket_name, msg)
+   sockets[socket_name].ping.tx_countdown = PING_TIME
+   sockets[socket_name].ping.ping_tries_remaining = PING_RETRIES
+
+   local success, error = gre.send_event_data(
+      socket_name .. 'Recv', "1s0 data", {data=msg})
+   if(success == false) then
+      log("GRE send error: " .. error)
+   end
+end
+
+local function received_bad_msg(socket_name, msg)
+   log(socket_name .. 'received bad msg:' .. msg)
+end
+
+local function set_next_reconnect_time(sock)
+   local rc = sock.reconnect
+
+   -- Do exponential backoff
+   if rc.delay == 0 then
+      rc.delay = 1
+   else
+      rc.delay = rc.delay * 2
+   end
+
+   if MAX_CONNECT_DELAY < rc.delay  then
+      rc.delay = MAX_CONNECT_DELAY
+   end
+
+   rc.countdown = rc.delay
+end
+
+local function set_socket_in_connected_state(sock)
+   sock.state = 'connected'
+   sock.ping.tx_countdown = PING_TIME
+   sock.ping.ping_tries_remaining = PING_RETRIES
+   sock.sock = newly_connected_socket
+   sock.reconnect.countdown = 0
+   sock.reconnect.delay = 0
+   sock.received_data = ''
+end
+
+local function complete_socket_connection(sock)
+   set_socket_in_connected_state(sock)
+   gre.send_event(sock.name .. 'Connected')
+   update_list_of_listening_sockets()
+end
+
+-- This function runs CBManageSockets onece per second.
+-- We use this instead of a Crank timer because those timers stop
+-- working if the system time is changed.
+local run_manage_sockets_timer_thread = true
+local function manage_sockets_timer()
+   --while true do
+   while run_manage_sockets_timer_thread do
+      gre.send_event_data('ManageSocketsTimer', '', {})
+      socket.sleep(1)
+   end
+   print("run_manage_sockets_timer_thread shutting down!!!!")
+end
+
+local function mark_pending_socks_as_failed()
+   for name, sock in pairs(sockets) do
+      if sock.state == 'connect_pending' then
+         log('Forcing ' .. name .. ' out of connect_pending state')
+         sock.state = 'connect_failed'
+         set_next_reconnect_time(sock)
+      end
+   end
+end
+
+-- If an error happens and we are stuck with a socket in
+-- 'connect_pending' for a while, mark that socket as 'connect_failed'
+-- so the system is no longer stuck.
+local pending_count = 0
+local function handle_socket_stuck_in_connect_pending()
+   pending_count = pending_count + 1
+   if 10 < pending_count then
+      mark_pending_socks_as_failed()
+      pending_count = 0
+   end
+end
+
+function CBManageSockets()
+   print_socket_stats()
+   update_reconnect_times()
+   handle_pings()
+
+   -- We exit here until the previous connection attempt succeeds or
+   -- times out
+   if connect_pending() then
+      log('connect_pending() == true')
+      print_sockets()
+      handle_socket_stuck_in_connect_pending()
+      return
+   end
+   pending_count = 0
+
+   connect_ready_socket()
+
+   if connect_pending() == false then
+      close_failed_sockets()
+   end
+end
+
+function CBsendData( mapargs )
+   local name = mapargs.context_event
+   name = string.sub(name, 1, -5) -- Strip off 'Send' suffix
+   local sock = sockets[name]
+   --?assert(sock, 'Trying to send on nonexistent socket: ' .. name) put back in
+
+   if sock.state ~= 'connected' then
+      log('CBsendData() called on a closed socket: ' .. name .. ' state=' .. sock.state)
+      return
+   end
+
+   local data = mapargs.context_event_data
+   if data == nil then
+      log('CBsendData called with no data')
+      return
+   end
+
+   local err = sendall(sock.sock, data.data)
+   if err then
+      log('Send failed, closing sock')
+      close_sock(sock)
+   end
+end
+
+function CBSocketConnected( mapargs )
+   local name = mapargs.context_event_data.name
+   local ok = mapargs.context_event_data.ok
+
+   local sock = sockets[name]
+   if sock == nil then
+      log('!!! Error in CBSocketConnected. This should never happen. ' .. name)
+      return
+   end
+
+   if ok == 1 then
+      local ip, port = newly_connected_socket:getsockname()
+      log('--------CBSocketConnected ' .. name .. '  local_port=' .. tostring(port))
+      complete_socket_connection(sock)
+   else
+      sock.state = 'connect_failed'
+      set_next_reconnect_time(sock)
+      log('--------CBSocketConnected failed on ' .. name .. ' next reconnect time ' .. sock.reconnect.delay)
+   end
+end
+
+-- This is called once at startup to initialize the sockets system
+function CBSocketsInit( mapargs )
+   log('\n\n---------  CBSocketsInit  ---------\n\n')
+   init_sockets()
+   gre.thread_create(manage_sockets_timer)
+   gre.thread_create(connect_thread)
+   gre.thread_create(listen_for_data)
+end
+
+function CBShutdownThreads()
+   print("Threads shutting down!!!!")
+   HaltWakeWatcherThread()
+   set_close_connection_state(true)
+   run_manage_sockets_timer_thread = false
+   run_connect_thread = false
+   run_listen_for_data_thread = false
+
+   print("OS exit!!!!")  
+   os.exit(0)
+
+end
+
+function CBSocketsReceiveData( mapargs )
+   rx_data_pending = 0
+   local socks = get_open_socket_descriptors()
+   local data_available, ready_socks = sock_select(socks, 0)
+   if not data_available then
+      log('! CBSocketsReceiveData. error on socket.select')
+      return
+   end
+
+   for i, s in ipairs(ready_socks) do
+      local name, sock = get_socket(s)  --? what if it fails
+
+      local rxdata, err, partial = s:receive()
+      local data = rxdata or partial or ''
+      log(name .. ' received ' .. tostring(string.len(data)) .. ' bytes')
+      sock.received_data = sock.received_data .. data
+
+      sock.received_data = json_chunker.parse(
+         name, sock.received_data, received_valid_msg, received_bad_msg)
+
+      if err and (err ~= 'timeout') then
+         log('!! CBSocketsReceiveData: ' .. err .. ' on ' .. name)
+         close_sock(sock)
+      elseif data and (string.len(data) == 0) then
+         log('!! CBSocketsReceiveData: Socket closed by remote')
+         close_sock(sock)
+      end
+   end
+end

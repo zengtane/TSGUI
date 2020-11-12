@@ -1,0 +1,804 @@
+local touchManager = require("TouchManager")
+local screenManager = require("ScreenManager")
+local parserFactory = require("ZwaveDeviceParserFactory")
+local zwaveDevice = require("ZWaveDevice") 
+local zwaveCommands = require("ZwaveCommands")
+local zwaveDeviceManager = require("ZWaveDeviceManager")
+local dropDownList = require("DropdownList")
+local util = require("Utils")
+-- local gpio = require "SystemGPIO"
+local private = {}
+local currentDevice = {device = "", type = "", status = ""}
+local ON = 1
+local OFF = 0
+local JAM = -1
+local BASICON = 1
+local BASICOFF = 0
+private.qsSliders = {}
+private.timerID = nil
+private.timerID2 = nil
+private.thermsotatModeTimerID = nil
+private.thermostatFanModeTimerID = nil
+private.deviceObject = nil
+private.deviceParser = nil
+private.tempCurrent = 71
+private.tempDesired = 76
+private.thermostatModeIter = nil
+private.thermostatFanModeIter = nil
+private.toggleButtonImages = {}
+private.dimmerStateObj = {}
+private.heatHit = false
+private.coolHit = false
+private.setPointC = 0.5
+private.setPointF = 1
+local deviceTypeList = {["Dimmer"] = "blind_dimmer",
+                        ["Garage"] = "garage_toggle",
+                        ["Lock"] = "lock_toggle",
+                        ["WaterValve"] = "tap_toggle",
+                        ["Switch"] = "light_toggle",
+                        ["Dimmer"] = "light_dimmer",
+                        ["Thermostat"] = "thermostat_control",
+                        ["Controller"] = "light_controller",
+                        ["Unknown"] = "light_controller"}
+
+
+function OnZwaveDeviceScreenShowPre(mapargs)
+  if(__viewModelProgramming == true) then    
+    gre.set_layer_attrs("ZwaveDeviceScreen.PanicButton",{hidden=1})
+    gre.set_layer_attrs("ZwaveDeviceScreen.BottomBar",{hidden=1})
+  else
+    gre.set_layer_attrs("ZwaveDeviceScreen.PanicButton",{hidden=0})
+    gre.set_layer_attrs("ZwaveDeviceScreen.BottomBar",{hidden=0})
+  end
+  if(screenManager.data.goBack ~= true)then
+    private.zwaveid = screenManager.data.id
+  end
+  private.deviceObject = zwaveDeviceManager.getZWaveDeviceObject(private.zwaveid)
+  local deviceType = private.isValidDeviceType(private.deviceObject:getType())
+  if deviceType~=nil then 
+    --populateScreenForDevice("thermostat_control")
+    populateScreenForDevice(deviceType)
+    private.updateBatteryImage(private.deviceObject)
+  else
+    screenManager.switchToPreviousScreen() 
+  end
+end
+function private.updateBatteryImage(deviceObj)
+  local d = {}
+    --QUICK-22956 due to limitation in TC, Panel GUI will match TC for consistency
+    if(deviceObj:isLowBattery())then
+      d["DevicesContent.IconBattery.grd_hidden"] = 0
+      d["DevicesContent.IconBattery.image"] = res["RES_BATTERY_LEVEL"][1]
+    else
+      d["DevicesContent.IconBattery.grd_hidden"] = 1
+    end
+    gre.set_data(d)
+end
+function private.isValidDeviceType(deviceType)
+  local value = nil
+  for key,val in pairs(deviceTypeList) do
+    if deviceType == key then
+      private.deviceParser = parserFactory.getParser(private.deviceObject)
+        value = val
+        break
+    end
+  end
+  return (private.deviceParser~=nil and value~=nil) and value or nil
+end  
+--
+--
+--
+--
+--["RES_DEVICE_TOGGLE_TAP_OFF"]
+--["RES_DEVICE_TOGGLE_LOCK_ON"]
+--["RES_DEVICE_TOGGLE_LOCK_OFF"]
+--["RES_DEVICE_TOGGLE_LIGHT_ON"]
+--["RES_DEVICE_TOGGLE_LIGHT_OFF"]
+--["RES_DEVICE_TOGGLE_BLIND_ON"]
+--["RES_DEVICE_TOGGLE_BLIND_OFF"]
+--["RES_DEVICE_TOGGLE_GARAGE_ON"]
+--["RES_DEVICE_TOGGLE_GARAGE_OFF"]
+function onPressDevicesContentToggle(mapargs)
+  local d = {}
+  d.context = mapargs
+  d.buttonImages = private.toggleButtonImages
+  d.releaseFunc = private.onToggleRelease
+  touchManager.setUpTouchEvent(d)
+end
+function private.onToggleRelease()
+  if (currentDevice.status == ON) then 
+    zwaveCommands.setValue(private.deviceObject,OFF)
+  else
+    zwaveCommands.setValue(private.deviceObject,ON)
+  end
+end
+--
+--
+--
+--
+function private.updateVisuals()
+  local d = {} 
+  local status = nil
+  local device = string.upper(currentDevice.device)
+  --
+  if(currentDevice.status == ON) then
+    if (device == "LIGHT" or device == "TAP" ) then status = sid["SID_DEVICE_ON"] 
+    elseif (device == "LOCK") then status = sid["SID_DEVICE_LOCKED"]
+    elseif (device == "GARAGE") then status = sid["SID_DEVICE_OPEN"] end
+    d["DevicesContent.GraphicStatus.image"] = res["RES_DEVICE_" .. device.. "_ON"]
+    private.toggleButtonImages = res["RES_DEVICE_TOGGLE_" .. device.. "_ON"]
+  elseif(device == "LOCK" and currentDevice.status == JAM) then
+    status = sid["SID_DEVICE_JAMMED"]
+    d["DevicesContent.GraphicStatus.image"] = res["RES_DEVICE_" .. device.. "_JAM"]
+    private.toggleButtonImages = res["RES_DEVICE_TOGGLE_" .. device.. "_OFF"]
+  else
+    if (device == "LIGHT" or device == "TAP" ) then status = sid["SID_DEVICE_OFF"] 
+    elseif (device == "LOCK") then status = sid["SID_DEVICE_UNLOCKED"]
+    elseif (device == "GARAGE") then status = sid["SID_DEVICE_CLOSED"] end
+    d["DevicesContent.GraphicStatus.image"] = res["RES_DEVICE_" .. device.. "_OFF"]
+    private.toggleButtonImages = res["RES_DEVICE_TOGGLE_" .. device.. "_OFF"]
+  end
+  
+  d["DevicesContent.Toggle.image"] = private.toggleButtonImages.up
+  d["DevicesContent.GraphicStatus.text"] = status
+  d["DevicesContent.BasicOn.text"] = sid["SID_ON"]
+  d["DevicesContent.BasicOff.text"] = sid["SID_OFF"]
+  gre.set_data(d)
+end
+
+function populateScreenForDevice(deviceType)
+  local s = deviceType
+  local words = {}
+  -- split s into table by "_"
+  for w in (s .. "_"):gmatch("([^_]*)_") do 
+    table.insert(words, w) 
+  end
+  local status = deviceType~="thermostat_control" and  private.deviceParser.getSwitchState() or nil
+  if(words[1] == "lock" and private.deviceParser.getJamState() == 1) then 
+    status = JAM 
+   end
+  currentDevice = {device = words[1], type = words[2], status = status}
+  local data = {}
+  data["DevicesContent.Title.text"] = private.deviceObject:getName()
+  data["DevicesContent.GraphicStatus.subText"] = ""
+  data["DevicesContent.GraphicStatus.text"] = ""
+  data["DevicesContent.GraphicStatus.image"] = ""
+  gre.set_data(data)
+  --
+  if (currentDevice.type == "toggle") then
+    gre.set_group_attrs("DevicesContent.Thermostat",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.Dimmer",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.Toggle",{ hidden = false})
+    gre.set_control_attrs("DevicesContent.BasicOff",{hidden = true})
+    gre.set_control_attrs("DevicesContent.BasicOn",{hidden = true})
+    gre.set_control_attrs("DevicesContent.line",{hidden = true})
+    gre.set_control_attrs("DevicesContent.GraphicStatus",{ hidden = false})
+    private.updateVisuals()
+  elseif (currentDevice.type == "controller") then
+    gre.set_group_attrs("DevicesContent.Thermostat",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.Dimmer",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.Toggle",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.GraphicStatus",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.BasicOff",{hidden = false})
+    gre.set_control_attrs("DevicesContent.BasicOn",{hidden = false})
+    gre.set_control_attrs("DevicesContent.line",{hidden = false})
+
+  elseif (currentDevice.type == "dimmer") then
+    gre.set_group_attrs("DevicesContent.Thermostat",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.Dimmer",{ hidden = false})
+    gre.set_control_attrs("DevicesContent.Toggle",{ hidden = true})
+    gre.set_control_attrs("DevicesContent.BasicOff",{hidden = true})
+    gre.set_control_attrs("DevicesContent.BasicOn",{hidden = true})
+    gre.set_control_attrs("DevicesContent.GraphicStatus",{ hidden = false})
+    gre.set_control_attrs("DevicesContent.line",{hidden = true})
+    --
+    local val = private.deviceParser.getDimmerValue()
+    local cont = "DevicesContent.Dimmer"
+    local vars = {"slider_offset"}
+    local valueRange = {0,99}
+    local offset = -50
+    local sliderRange = {(4-offset),(339-offset)}
+    private.qsSliders[1] = newQSSliderControl(val, cont, vars, true, offset, sliderRange, valueRange, false,private.onSliderPressFunction, private.releaseFunc,private.moveFunc)
+    --
+    local currentDimmerValue = private.deviceParser.getDimmerValue()
+    private.qsSliders[1]:setValue(currentDimmerValue)
+    private.moveFunc(private.qsSliders[1])
+  elseif (currentDevice.device == "thermostat") then
+    private.updateThermostatVisuals()
+  end
+end
+
+
+function private.updateThermostatVisuals()
+  gre.set_group_attrs("DevicesContent.Thermostat",{ hidden = false})
+  gre.set_control_attrs("DevicesContent.Dimmer",{ hidden = true})
+  gre.set_control_attrs("DevicesContent.Toggle",{ hidden = true})
+  gre.set_control_attrs("DevicesContent.Thermostat.ButtonHold",{ hidden = true})
+  gre.set_control_attrs("DevicesContent.Thermostat.Schedule",{ hidden = true})
+  gre.set_control_attrs("DevicesContent.BasicOff",{hidden = true})
+  gre.set_control_attrs("DevicesContent.BasicOn",{hidden = true})
+  gre.set_control_attrs("DevicesContent.line",{hidden = true})
+  --
+  local d = {}
+  d["DevicesContent.Thermostat.Mode.text"] = sid["SID_THERMO_MODE"]
+  d["DevicesContent.Thermostat.Fan.text"] = sid["SID_THERMO_FAN"]
+  d["DevicesContent.Thermostat.TextIndoor.text"] = sid["SID_INDOOR_TEMP"]
+  d["DevicesContent.Thermostat.TextEco.text"] = sid["SID_ENERGY_SAVING"]
+  
+  local currentTemp = private.deviceParser.getCurrentTemperature().temp
+  local thermostatMode = private.deviceParser.getThermostatMode()
+  local thermostatFanMode = private.deviceParser.getThermostatFanMode()
+  local setpointTemp = 0
+  local setpointTemp2 = 0
+  if thermostatMode~="Auto" and thermostatMode ~= "Off" then
+    setpointTemp = private.deviceParser.getSetpointTemperature().temp
+    private.showThermostatRightSideLayer()
+  elseif thermostatMode == "Auto" then
+    setpointTemp = private.deviceParser.getAutoSetpoints()["heat"]
+    setpointTemp2 = private.deviceParser.getAutoSetpoints()["cool"]
+    private.tempDesired2 = setpointTemp2 
+  end
+  
+  
+  private.tempDesired = setpointTemp   
+  private.thermostatModeIter = thermostatMode
+  private.thermostatFanModeIter = thermostatFanMode
+  private.updateThermostatMode(thermostatMode)
+  private.updateThermostatFanMode(thermostatFanMode)
+   
+  d["DevicesContent.Thermostat.TempCurrent.text"] = tonumber(string.format("%.1f", currentTemp))
+  if private.heatHit == false then
+    d["DevicesContent.Thermostat.TempDesired.text"] = setpointTemp
+  else
+    local data_table = gre.get_data("DevicesContent.Thermostat.TempDesired.text")
+    local value = data_table["DevicesContent.Thermostat.TempDesired.text"]
+    if tonumber(value) ~= tonumber(setpointTemp) then
+      d["DevicesContent.Thermostat.TempDesired.text"] = setpointTemp
+    end
+  end
+  if private.coolHit == false then
+    d["DevicesContent.Thermostat.TempDesired2.text"] = setpointTemp2
+  else
+    local data_table = gre.get_data("DevicesContent.Thermostat.TempDesired2.text")
+    local value = data_table["DevicesContent.Thermostat.TempDesired2.text"]
+    if tonumber(value) ~= tonumber(setpointTemp2) then
+      d["DevicesContent.Thermostat.TempDesired2.text"] = setpointTemp2
+    end
+   end
+   
+  gre.set_data(d)
+  if thermostatMode~="Off" then
+    --private.scheduleFollowOrHold("hold")
+  end  
+end
+
+
+function private.onSliderPressFunction(qsSliderObj)
+  private.timerID = gre.timer_set_interval(private.onSilderMoveTimeoutFunction,500)
+end
+
+
+--
+--
+--
+function private.moveFunc(qsSliderObj)
+    local value = qsSliderObj:getPercentage()
+    private.updateGraphicStatus(value)
+    private.updateIconsInDimmer(value)
+end
+
+function private.onSilderMoveTimeoutFunction(qsSliderObj)
+  local value =  private.qsSliders[1]:getValue()
+  zwaveCommands.setValue(private.deviceObject,value)
+end
+
+--
+--
+--
+function private.updateGraphicStatus(val)
+  local device = string.upper(currentDevice.device)
+  -- imageList is a set of images for the GraphicStatus when the percentage varies
+  local imageList = device == "LIGHT" and {"light_off", "light_on"} or {"blind_off", "blind_4", "blind_3", "blind_2", "blind_on"}
+  local range = #imageList - 1
+  local adjusted = math.ceil((val/100) * range) + 1
+  local obj = {State = val > 0, Range = adjusted}
+  -- by default, set the status to either ON (light) or OPEN (blind)
+  local d = {}
+  d["DevicesContent.GraphicStatus.subText"] = val~=nil and val.."%" or " "
+--  if(private.dimmerStateObj.State ~= obj.State)then
+    local status = device == "LIGHT" and sid["SID_DEVICE_ON"] or sid["SID_DEVICE_OPEN"]
+    if(not obj.State)then
+      status = device == "LIGHT" and sid["SID_DEVICE_OFF"] or sid["SID_DEVICE_CLOSED"]
+    end
+    d["DevicesContent.GraphicStatus.text"] = status
+    private.dimmerStateObj.State = obj.State
+--  end
+--  if(private.dimmerStateObj.Range ~= obj.Range)then
+    d["DevicesContent.GraphicStatus.image"] = "images/devices/"..imageList[obj.Range]..".png"
+    private.dimmerStateObj.Range = obj.Range
+--  end
+  gre.set_data(d)
+end
+--
+-- 707070 (grey)
+-- 1792e5 (blue) for blind
+-- ffc627 (yellow) for light
+function private.updateIconsInDimmer(val)
+  local device = string.upper(currentDevice.device)
+  local dimmerState =""
+  if(val < 1 ) then
+    dimmerState = "Off"
+  elseif (val > 99 ) then
+    dimmerState = "On"
+  else 
+    dimmerState = "Percentage"
+  end
+  local d = {}
+  if dimmerState == "Percentage" then
+  print("Percentage---device----"..device)
+    d["DevicesContent.Dimmer.color"] = device == "LIGHT" and 0xffc627 or 0x1792e5
+    d["DevicesContent.Dimmer.icon1"] = res["RES_DEVICE_DIMMER_" .. device.. "_OFF_1"]
+    d["DevicesContent.Dimmer.icon2"] = res["RES_DEVICE_DIMMER_" .. device.. "_ON_1"]
+  elseif dimmerState == "On"then
+  print("dimmerState == On--device----"..device)
+    d["DevicesContent.Dimmer.color"] = device == "LIGHT" and 0xffc627 or 0x1792e5
+    d["DevicesContent.Dimmer.icon1"] = res["RES_DEVICE_DIMMER_" .. device.. "_OFF_1"]
+    d["DevicesContent.Dimmer.icon2"] = res["RES_DEVICE_DIMMER_" .. device.. "_ON_2"]
+  else
+    d["DevicesContent.Dimmer.color"] = 0x707070
+    print("device----"..device)
+    d["DevicesContent.Dimmer.icon1"] = res["RES_DEVICE_DIMMER_" .. device.. "_OFF_2"]
+    d["DevicesContent.Dimmer.icon2"] = res["RES_DEVICE_DIMMER_" .. device.. "_ON_1"]
+  end
+  private.dimmerState = dimmerState
+  gre.set_data(d)
+end
+--
+--
+--
+function private.releaseFunc(qsSliderObj)
+if private.timerID~=nil then
+  gre.timer_clear_interval(private.timerID)
+end
+  local val = qsSliderObj:getValue()
+  zwaveCommands.setValue(private.deviceObject,val)
+  local per = qsSliderObj:getPercentage()
+  local data = {}
+  data["DevicesContent.GraphicStatus.subText"] = per.."%"
+  gre.set_data(data)
+end
+
+function onDeviceStatusChangeEventListener(mapargs)
+  local str = mapargs.context_event_data.device
+  local newobj = zwaveDevice.initZWaveDevice(json.decode(str))
+  if newobj:getID() == private.deviceObject:getID() then
+    
+    print("ZWaveDeviceScreen - Receive Status Update")
+    if currentDevice.type == "toggle" then
+      local device = string.upper(currentDevice.device)
+      if (device == "LOCK") then
+        if(private.deviceParser.getJamState() == 1) then currentDevice.status = JAM else 
+          currentDevice.status = private.deviceParser.getSwitchState()  end
+        private.deviceObject:update(newobj)
+        if(private.deviceParser.getJamState() == 1) then currentDevice.status = JAM else
+          currentDevice.status = private.deviceParser.getSwitchState() end
+      else
+        currentDevice.status = private.deviceParser.getSwitchState() 
+        private.deviceObject:update(newobj)
+        currentDevice.status = private.deviceParser.getSwitchState()
+      end
+      private.updateVisuals()
+    elseif currentDevice.type == "dimmer" then
+      if(not private.qsSliders[1].pressed)then
+        private.deviceObject:update(newobj)
+        local currentDimmerValue = private.deviceParser.getDimmerValue()
+        private.qsSliders[1]:setValue(currentDimmerValue)
+        private.moveFunc(private.qsSliders[1])
+      end
+      local per = private.qsSliders[1]:getPercentage()
+      private.updateGraphicStatus(per)
+      private.updateIconsInDimmer(per)
+    elseif currentDevice.type == "control" and currentDevice.device == "thermostat" then
+      private.deviceObject:update(newobj)
+      private.updateThermostatVisuals()
+    end
+    private.updateBatteryImage(newobj)
+    -- update title just in case
+    local d = {}
+    d["DevicesContent.Title.text"] = newobj:getName()
+    gre.set_data(d)
+  end    
+end  
+
+function zwaveDeviceScreenonBackButtonPressListener()
+  screenManager.switchToPreviousScreen() 
+end
+
+
+function onPressDeviceThermostatDown(mapargs) 
+  private.heatHit = true
+  local d = {}
+  d.buttonImages = res["RES_THERMO_ARROWS_DOWN"]
+  d.context = mapargs
+ 
+  d.releaseFunc = function()
+    local minTemp = nil
+    if(private["thermostatModeIter"] == "Auto") then
+      minTemp = private.deviceParser.getSetpointTemperatureRange().Heat.min  --top down button is for heat
+    else
+      minTemp = private.deviceParser.getSetpointTemperatureRange()[private["thermostatModeIter"]]["min"]
+    end
+    local unit = private.deviceParser.getCurrentTemperature()["unit"]
+    if(private.tempDesired > minTemp) then
+      private.tempDesired = unit=="C" and ( private.tempDesired-private.setPointC) or ( private.tempDesired-private.setPointF)
+      local d = {}
+      d["DevicesContent.Thermostat.TempDesired.text"] = private.tempDesired
+      gre.set_data(d)
+      if private.timerID~=nil then
+         gre.timer_clear_timeout(private.timerID)
+         private.timerID = nil
+      end
+      private.timerID = gre.timer_set_timeout(function() private.onThermostatChangeSetPointTimeout()end,500)
+    end
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+
+function onPressDeviceThermostatUp(mapargs) 
+private.heatHit = true
+  local d = {}
+  d.buttonImages = res["RES_THERMO_ARROWS_UP"]
+  d.context = mapargs
+  d.releaseFunc = function()    
+    local maxTemp = nil
+    if(private["thermostatModeIter"] == "Auto") then
+      maxTemp = private.deviceParser.getSetpointTemperatureRange().Heat.max  --top down button is for heat
+    else
+      maxTemp = private.deviceParser.getSetpointTemperatureRange()[private["thermostatModeIter"]]["max"]
+    end
+    
+    local unit = private.deviceParser.getCurrentTemperature()["unit"]
+    if(private.tempDesired < maxTemp) then
+      private.tempDesired = unit=="C" and ( private.tempDesired+private.setPointC) or ( private.tempDesired+private.setPointF)
+    end
+    local d = {}
+    d["DevicesContent.Thermostat.TempDesired.text"] = private.tempDesired
+    gre.set_data(d)
+    if private.timerID~=nil then
+      gre.timer_clear_timeout(private.timerID)
+      private.timerID = nil
+    end
+    private.timerID = gre.timer_set_timeout(function() private.onThermostatChangeSetPointTimeout()end,500)
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+
+
+function onPressDeviceThermostatDown2(mapargs)
+  private.coolHit = true 
+  local d = {}
+  d.buttonImages = res["RES_THERMO_ARROWS_DOWN"]
+  d.context = mapargs
+  d.releaseFunc = function()
+    local minTemp = nil
+    if(private["thermostatModeIter"] == "Auto") then
+      minTemp = private.deviceParser.getSetpointTemperatureRange().Cool.min  --top down button is for heat
+    else
+      minTemp = private.deviceParser.getSetpointTemperatureRange()[private["thermostatModeIter"]]["min"]
+    end
+    if(private.tempDesired2 > minTemp) then
+      private.tempDesired2 = private.tempDesired2 - 1
+    end
+    local d = {}
+    d["DevicesContent.Thermostat.TempDesired2.text"] = private.tempDesired2
+    gre.set_data(d)
+    if private.timerID2~=nil then
+      gre.timer_clear_timeout(private.timerID2)
+      private.timerID2 = nil
+    end
+    private.timerID2 = gre.timer_set_timeout(function() private.onThermostatChangeSetPointTimeout2()end,500)
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+function onPressDeviceThermostatUp2(mapargs) 
+  private.coolHit = true
+  local d = {}
+  d.buttonImages = res["RES_THERMO_ARROWS_UP"]
+  d.context = mapargs
+  d.releaseFunc = function()
+    local maxTemp = nil
+    if(private["thermostatModeIter"] == "Auto") then
+      maxTemp = private.deviceParser.getSetpointTemperatureRange().Cool.max  --top down button is for heat
+    else
+      maxTemp = private.deviceParser.getSetpointTemperatureRange()[private["thermostatModeIter"]]["max"]
+    end
+    if(private.tempDesired2 < maxTemp) then
+      private.tempDesired2 = private.tempDesired2 + 1
+    end
+    local d = {}
+    d["DevicesContent.Thermostat.TempDesired2.text"] = private.tempDesired2
+    gre.set_data(d)
+    if private.timerID2~=nil then
+      gre.timer_clear_timeout(private.timerID2)
+      private.timerID2 = nil
+    end
+    private.timerID = gre.timer_set_timeout(function() private.onThermostatChangeSetPointTimeout2()end,500)
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+
+
+function private.onThermostatChangeSetPointTimeout()
+  private.timerID = nil
+  local mode = private.deviceParser.getThermostatMode()
+  mode = mode == "Auto" and "Heat" or mode
+  local unit = private.deviceParser.getCurrentTemperature()["unit"]
+  zwaveCommands.changeThermostatSetpoint(private.deviceObject,mode,private.tempDesired,unit)
+end
+
+function private.onThermostatChangeSetPointTimeout2()
+  private.timerID = nil
+  local mode = "Cool"
+  local unit = private.deviceParser.getCurrentTemperature()["unit"]
+  zwaveCommands.changeThermostatSetpoint(private.deviceObject,mode,private.tempDesired2,unit)
+end
+
+function private.updateThermostatMode(thermostatMode)
+  local thermostatModeIconList = {
+  ["Cool"] = res["RES_THERMO_COOL"].up,
+  ["Heat"] = res["RES_THERMO_HEAT"].up,
+  ["EcoCool"] = res["RES_THERMO_COOL"].up,
+  ["EcoHeat"] = res["RES_THERMO_HEAT"].up,
+  ["AuxHeat"] = res["RES_THERMO_HEAT"].up,
+  ["Off"] = res["RES_THERMO_OFF"].up,
+  ["Auto"] = res["RES_THERMO_AUTO"].up}
+  
+  local d = {}
+  local c = 0x707070
+  local t = ""
+  local eco = string.sub(thermostatMode,1,3) == "Eco" and true or false
+  d["DevicesContent.Thermostat.TextEco.grd_hidden"] = 1
+  private.showSetpoint2(1)
+  if (thermostatMode == "Heat" or thermostatMode == "EcoHeat" or thermostatMode == "AuxHeat") then
+    -- heat up
+    c = 0xF36F20
+    t = sid["SID_THERMO_HEAT_TO"]
+  elseif (thermostatMode == "Cool" or thermostatMode == "EcoCool") then
+    -- cool down
+    c = 0x1792e5
+    t = sid["SID_THERMO_COOL_TO"]
+  elseif thermostatMode == "Off" then
+    private.hideThermostatRightSideLayer()
+    d["DevicesContent.Thermostat.TempCurrent.color"] = 0x707070
+  elseif thermostatMode == "Auto" then
+    private.showThermostatRightSideLayer()
+    private.showSetpoint2(0)
+    c = 0xF36F20
+    t = sid["SID_THERMO_HEAT_TO"]
+  end
+  d["DevicesContent.Thermostat.TempDesired2.color"] = 0x1792e5
+  d["DevicesContent.Thermostat.TextHeatCool2.text"] = sid["SID_THERMO_COOL_TO"]
+  if thermostatMode == "Auto" then
+    d["DevicesContent.Thermostat.TempCurrent.color"] = private.tempCurrent < private.tempDesired and 0xF36F20 or 0x1792e5     
+  else
+    d["DevicesContent.Thermostat.TempCurrent.color"] = c
+  end  
+  d["DevicesContent.Thermostat.TempDesired.color"] = c
+  d["DevicesContent.Thermostat.TextHeatCool.text"] = t
+  --d["DevicesContent.Thermostat.TempDesired.text"] = private.tempDesired
+  if eco then
+    d["DevicesContent.Thermostat.TextEco.grd_hidden"] = 0
+    d["DevicesContent.Thermostat.TextEco.color"] = c
+  end
+    d["DevicesContent.Thermostat.Mode.image"] = thermostatModeIconList[thermostatMode]~= nil 
+      and thermostatModeIconList[thermostatMode] or res["RES_DEVICE_THERMOSTAT_MODE_AUTO"] 
+  gre.set_data(d)
+end
+
+function private.showSetpoint2(mode)
+  local d = {}
+  d["DevicesContent.Thermostat.TempDesired2.grd_hidden"] = mode
+  d["DevicesContent.Thermostat.TextHeatCool2.grd_hidden"] = mode
+  d["DevicesContent.Thermostat.ButtonUp2.grd_hidden"] = mode
+  d["DevicesContent.Thermostat.ButtonDown2.grd_hidden"] = mode
+  gre.set_data(d)
+end
+
+
+function private.updateThermostatFanMode(FanMode)
+  local thermostatFanModeIconList = {
+  ["Auto"] = res["RES_FAN_AUTO"].up,
+  ["AutoCirculate"] = res["RES_FAN_CIRCULATE"].up,
+  ["On"] = res["RES_FAN_ON"].up} 
+  local d = {}
+  d["DevicesContent.Thermostat.Fan.image"] = thermostatFanModeIconList[FanMode]
+  gre.set_data(d)
+end
+
+function private.scheduleFollowOrHold(str)
+  if(str == "follow") then
+    gre.set_control_attrs("DevicesContent.Thermostat.ButtonHold",{ hidden = true})
+    local d = {}
+    d["DevicesContent.Thermostat.TextFollow.text"] = sid["SID_THERMO_FOLLOW_SCHEDULE"]
+    gre.set_data(d)
+  else
+    gre.set_control_attrs("DevicesContent.Thermostat.ButtonHold",{ hidden = false})
+  end
+end
+
+function private.thermostatFanModeOnClickListener()
+
+  local thermostatFanModeText = {
+    ["Auto"] = {text = sid["SID_AUTO"], image = res["RES_DEVICE_THERMOSTAT_SMALL_FAN_AUTO"]},
+    ["AutoCirculate"] = {text = sid["SID_CIRCULATE"], image = res["RES_DEVICE_THERMOSTAT_SMALL_FAN_CIRCULATE"]},
+    ["On"] = {text = sid["SID_ON"] , image = res["RES_DEVICE_THERMOSTAT_SMALL_FAN_ON"]}
+  }
+  
+  local data = {}
+  private.thermostatFanModeOptions = {}
+  local selected = 1
+  local counter = 0
+  for key,val in pairs(private.deviceParser.getThermostatFanModeList()) do
+    local cell = {}
+    if thermostatFanModeText[key] ~= nil then
+      counter = counter + 1
+      cell["text"] = thermostatFanModeText[key].text
+      -- change this to real icons when available
+      cell["image"] = thermostatFanModeText[key].image 
+      cell["x_text"] = 60
+      private.thermostatFanModeOptions[counter] = key
+      table.insert(data,cell)
+      if key == private.thermostatFanModeIter then
+        selected = counter 
+      end
+    end  
+  end
+  local func = function(index)
+    private.onThermostatFanModeDropDownSelected(index)
+  end
+  dropDownList.showWithIcon(220,220,180,data, selected, func)
+end
+--
+--
+--
+function onPressThermoMode(mapargs)
+  local thermostatModeIconList = {
+  ["Cool"] = res["RES_THERMO_COOL"],
+  ["Heat"] = res["RES_THERMO_HEAT"],
+  ["EcoCool"] = res["RES_THERMO_COOL"],
+  ["EcoHeat"] = res["RES_THERMO_HEAT"],
+  ["AuxHeat"] = res["RES_THERMO_HEAT"],
+  ["Off"] = res["RES_THERMO_OFF"],
+  ["Auto"] = res["RES_THERMO_AUTO"]}
+  local d = {}
+  d.buttonImages = thermostatModeIconList[private.thermostatModeIter]
+  d.context = mapargs
+  d.releaseFunc = function()
+    private.thermostatModeOnClickListener()
+  end
+  touchManager.setUpTouchEvent(d)
+end
+function private.thermostatModeOnClickListener()
+  local thermostatModeText = {
+    ["Auto"] = {text = sid["SID_AUTO"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_AUTO"]},
+    ["Heat"] = {text = sid["SID_HEAT"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_HEAT"]},
+    ["AuxHeat"] = {text = sid["SID_EMERGENCY_HEAT"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_EMERGENCY_HEAT"]},
+    ["Cool"] = {text = sid["SID_COOL"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_COOL"]},
+    ["EcoHeat"] = {text = sid["SID_ENERGY_SAVE_HEAT"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_ECO_HEAT"]},
+    ["EcoCool"] = {text = sid["SID_ENERGY_SAVE_COOL"], image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_ECO_COOL"]},
+    ["Off"] = {text = sid["SID_OFF"] , image = res["RES_DEVICE_THERMOSTAT_SMALL_MODE_OFF"]}
+  }
+  
+  local data = {}
+  private.thermostatModeOptions = {}
+  local selected = 1
+  local counter = 0
+  for key,val in pairs(private.deviceParser.getThermostatModeList()) do
+    local cell = {}
+    if thermostatModeText[key] ~= nil then
+      counter = counter + 1
+      cell["text"] = thermostatModeText[key].text
+      -- change this to real icons when available
+      cell["image"] = thermostatModeText[key].image 
+      cell["x_text"] = 60
+      private.thermostatModeOptions[counter] = key
+      table.insert(data,cell)
+      if key == private.thermostatModeIter then
+        selected = counter 
+      end
+    end  
+  end
+  local func = function(index)
+    private.onThermostatModeDropDownSelected(index)
+  end
+  dropDownList.showWithIcon(90,150,280,data, selected, func)
+end
+--
+--
+--
+function onPressFan(mapargs) 
+  local d = {}
+  d.buttonImages = res["RES_FAN_AUTO"]
+  d.context = mapargs
+  d.releaseFunc = function()
+    private.thermostatFanModeOnClickListener()
+  end
+  touchManager.setUpTouchEvent(d)
+end
+--
+--
+--
+function onPressSchedule(mapargs) 
+  local d = {}
+  d.buttonImages = res["RES_SCHEDULE"]
+  d.context = mapargs
+  d.releaseFunc = function()
+  end
+  touchManager.setUpTouchEvent(d)
+end
+--
+--
+--
+function private.onThermostatModeDropDownSelected(index)
+  local desiredMode = private.thermostatModeOptions[index]
+  zwaveCommands.changeThermostatMode(private.deviceObject,private.deviceParser.getThermostatModeList()[desiredMode])
+end
+
+function private.onThermostatFanModeDropDownSelected(index)
+  local desiredMode = private.thermostatFanModeOptions[index]
+  zwaveCommands.changeThermostatFanMode(private.deviceObject,private.deviceParser.getThermostatFanModeList()[desiredMode])
+end
+
+function private.hideThermostatRightSideLayer()
+  local d = {}
+  d["DevicesContent.Thermostat.TempDesired.grd_hidden"] = 1
+  d["DevicesContent.Thermostat.ButtonUp.grd_hidden"] = 1
+  d["DevicesContent.Thermostat.ButtonDown.grd_hidden"] = 1
+  d["DevicesContent.Thermostat.TextHeatCool.grd_hidden"] = 1
+  d["DevicesContent.Thermostat.ButtonHold.grd_hidden"] = 1
+  gre.set_data(d)
+end
+
+function private.showThermostatRightSideLayer()
+  local d = {}
+  d["DevicesContent.Thermostat.TempDesired.grd_hidden"] = 0
+  d["DevicesContent.Thermostat.ButtonUp.grd_hidden"] = 0
+  d["DevicesContent.Thermostat.ButtonDown.grd_hidden"] = 0
+  d["DevicesContent.Thermostat.TextHeatCool.grd_hidden"] = 0
+  gre.set_data(d)
+end
+
+function onPressZwaveDeviceSettingsButton(mapargs) 
+  local d = {}
+  d.buttonImages = res["RES_BUTTON_SETTINGS"]
+  d.context = mapargs
+  d.releaseFunc = function()
+    local data = {}
+    data.device = private.deviceObject
+    screenManager.switchToNextScreen("DeviceSettingScreen",data)
+  end
+  touchManager.setUpTouchEvent(d)
+end
+
+
+
+
+
+--- @param gre#context mapargs
+function SetBasicOn(mapargs) 
+--TODO: Your code goes here...
+  print("set basic on")
+  zwaveCommands.setValue(private.deviceObject,BASICON)
+end
+
+
+--- @param gre#context mapargs
+function SetBasicOff(mapargs) 
+--TODO: Your code goes here...
+  print("set basic off")
+  zwaveCommands.setValue(private.deviceObject,BASICOFF)
+end
